@@ -1,6 +1,7 @@
 ---
 name: pr-autopilot
 description: Orchestrates the full lifecycle of a Pull Request — creation, multi-agent code review, automated review response with code fixes, CI monitoring, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "review and merge my branch"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
+argument-hint: "[--auto] [--review=true|false] [--resolve=true|false] [--no-merge] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
 ---
 
 # pr-autopilot

@@ -72,6 +72,30 @@ cp SKILL.md .claude/skills/pr-autopilot/
 
 That's it — Claude Code auto-discovers it on next session.
 
+When you start typing `/pr-autopilot` in Claude Code, the available flags
+(`--auto`, `--review`, `--resolve`, `--no-merge`, `--draft`, …) appear inline
+thanks to the `argument-hint` declared in the skill's front-matter — same
+pattern GSD uses.
+
+## Development workflow
+
+This repository **is** the development source of the skill. Clone it,
+iterate on `SKILL.md`, then sync to your global Claude Code skills dir:
+
+```bash
+git clone https://github.com/FelipeOFF/pr-autopilot.git
+cd pr-autopilot
+
+make check       # validate SKILL.md front-matter
+make dry-run     # see what would be installed
+make sync        # install/update ~/.claude/skills/pr-autopilot/
+make diff        # diff repo SKILL.md vs installed copy
+make uninstall   # remove the global install
+```
+
+After `make sync`, run `/reload-plugins` inside Claude Code (or restart the
+session) to pick up the updated skill.
+
 ## Modes
 
 You pick one of four modes:
