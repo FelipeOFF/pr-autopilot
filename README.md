@@ -72,22 +72,41 @@ cp SKILL.md .claude/skills/pr-autopilot/
 
 That's it — Claude Code auto-discovers it on next session.
 
+## Modes
+
+You pick one of four modes:
+
+| Mode | How to invoke | What happens |
+|------|---------------|--------------|
+| **PR only** | `/pr-autopilot --review=false` | Creates PR, waits for CI, merges |
+| **PR + review** | `/pr-autopilot --review=true --resolve=false` | Creates PR, posts **inline** review comments, stops |
+| **PR + review + resolve** *(default)* | `/pr-autopilot` | Creates PR, inline review, Author replies inline + commits fixes, loops, then merge on green CI |
+| **Auto (full hands-off)** | `/pr-autopilot --auto` | Same as default, but explicit: never prompts. Waits for **all** CI checks. Merges only when everything is green. Halts on any failure. |
+
+`--auto` is shorthand for "do the whole thing without asking me anything, but never merge if tests fail." It does not relax any guardrail.
+
 ## Usage
 
 From any branch with commits to ship:
 
 ```bash
-# Standard: open PR, run the review loop, merge on green CI
+# Fully autonomous: review + resolve + wait CI + merge
+/pr-autopilot --auto
+
+# Default: review + resolve + merge
 /pr-autopilot
 
-# Stop before merge (human sign-off)
-/pr-autopilot --no-merge
+# Open PR, post inline review, stop (human will resolve)
+/pr-autopilot --review=true --resolve=false
 
 # Skip review, just create and auto-merge
 /pr-autopilot --review=false
 
-# More loops, rebase merge
-/pr-autopilot --max-iterations=3 --merge-strategy=rebase
+# Stop before merge (human sign-off)
+/pr-autopilot --no-merge
+
+# Auto mode with tighter loop and rebase merge
+/pr-autopilot --auto --max-iterations=3 --merge-strategy=rebase
 
 # Draft PR (creation only)
 /pr-autopilot --draft
@@ -97,7 +116,9 @@ From any branch with commits to ship:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--review` | `true` | Run the Reviewer/Author loop |
+| `--auto` | `false` | Full hands-off: review + resolve + wait CI + merge. Never prompts. |
+| `--review` | `true` | Run the Reviewer subagent (inline comments) |
+| `--resolve` | `true` | Run the Author subagent (inline replies + fixes) |
 | `--max-iterations` | `2` | Max review→respond cycles |
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
 | `--base` | auto | Target branch |
@@ -105,6 +126,23 @@ From any branch with commits to ship:
 | `--no-merge` | `false` | Stop after approval |
 | `--ci-timeout` | `1800` | Seconds before bailing on CI |
 | `--ci-poll-interval` | `30` | Seconds between polls |
+
+### Inline review & inline replies
+
+The Reviewer **never** posts a single bulk PR comment. Every finding is posted as an inline comment on the exact file + line, with a severity tag:
+
+- `[BLOCKER]` — must be fixed before merge
+- `[SUGGESTION]` — should likely be fixed
+- `[NITPICK]` — optional
+
+The Author replies on each inline comment with one of:
+
+- `✅ FIXED in <sha>` — code was changed
+- `🛑 REFUTED` — finding is wrong, with code evidence
+- `⏸ DEFERRED` — acknowledged, follow-up planned
+- `🤷 SKIPPED` — only allowed for NITPICKs
+
+The orchestrator validates that no BLOCKER ever ends up `DEFERRED`/`SKIPPED`.
 
 Full reference in [`SKILL.md`](./SKILL.md).
 
@@ -130,10 +168,12 @@ See [SECURITY.md](./SECURITY.md) for the full threat model and how to report iss
 ## Output
 
 ```
+[mode] --auto (full hands-off)
 [1/6] PR #482 created → https://github.com/acme/api/pull/482
-[2/6] Reviewer iter 1 → CHANGES_REQUESTED (2 BLOCKER, 3 SUGGESTION)
-[3/6] Author iter 1   → 2 fixed, 1 deferred, pushed abc1234
+[2/6] Reviewer iter 1 → CHANGES_REQUESTED (2 BLOCKER, 3 SUGGESTION) — 5 inline comments posted
+[3/6] Author iter 1   → 2 fixed, 1 deferred, replies posted, pushed abc1234
 [2/6] Reviewer iter 2 → APPROVED
+[5/6] CI: waiting… 2/4 pending
 [5/6] CI: 4/4 checks green
 [6/6] Merged (squash) → main @ def5678
 ```

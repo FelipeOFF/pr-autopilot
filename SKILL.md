@@ -15,9 +15,28 @@ This skill is **rigid**. Follow the phases in order. Do not skip the verificatio
 
 Parse these from the user's invocation. Apply defaults when missing.
 
+### Mode flags (the user picks one of four modes)
+
+| Mode | Flags | Pipeline |
+|------|-------|----------|
+| **PR only** | `--review=false` | Phase 1 → Phase 5 → Phase 6 |
+| **PR + review** | `--review=true --resolve=false` | Phase 1 → Phase 2 (Reviewer posts inline comments) → STOP |
+| **PR + review + resolve** *(default)* | `--review=true --resolve=true` | Phase 1 → Phase 2 → Phase 3 (Author replies inline + commits) → loop → Phase 5 → Phase 6 |
+| **Auto (full hands-off)** | `--auto` | Same as mode 3, but explicit: orchestrator runs the full pipeline end-to-end without prompting, waits for ALL CI checks to pass, and only then merges. Halts on any verification or CI failure. |
+
+`--auto` is shorthand for `--review=true --resolve=true --no-merge=false`, plus an
+explicit "do not interrupt for confirmation" semantic. It does **not** weaken any
+guardrail: failing tests, failing CI, failing verification, or unresolved BLOCKERs
+still halt the pipeline. The merge step only executes when Phase 5 reports all
+checks green AND the PR is `MERGEABLE`.
+
+### All flags
+
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--review` | `true` | Run Reviewer/Author subagent loop. `false` skips straight to CI + merge. |
+| `--auto` | `false` | Enable fully autonomous mode (review + resolve + wait CI + merge). Sets `--review=true`, `--resolve=true`, `--no-merge=false` and disables interactive prompts. |
+| `--review` | `true` | Run the Reviewer subagent. `false` skips straight to CI + merge. |
+| `--resolve` | `true` | Run the Author subagent that addresses each review comment. Requires `--review=true`. |
 | `--max-iterations` | `2` | Max review→respond cycles before forcing escalation to user. |
 | `--merge-strategy` | `squash` | One of `squash`, `merge`, `rebase`. |
 | `--base` | auto-detect | Target branch. Defaults to repo default branch (`main`/`master`/`trunk`). |
@@ -29,11 +48,36 @@ Parse these from the user's invocation. Apply defaults when missing.
 | `--title` | auto-generated | Override generated title. |
 | `--body` | auto-generated | Override generated body. |
 
-Invocation patterns:
-- `pr-autopilot` → all defaults
-- `pr-autopilot --no-merge` → review only, leave PR open
+### Invocation flow (decision tree)
+
+```
+pr-autopilot
+   │
+   ├─ --auto ─────────────────────► full hands-off: PR → review → resolve →
+   │                                 wait ALL CI → merge (halts on any failure)
+   │
+   ├─ --review=false ─────────────► PR only (CI + merge)
+   │
+   └─ --review=true (default)
+            │
+            ├─ --resolve=false ───► PR + inline review (stops, waits for human)
+            │
+            └─ --resolve=true ────► PR + inline review + Author addresses each
+                  (default)          comment + reply per comment + CI + merge
+```
+
+Invocation examples:
+- `pr-autopilot --auto` → full hands-off pipeline; merges only when CI is green
+- `pr-autopilot` → default pipeline (review + resolve + merge)
 - `pr-autopilot --review=false` → just create PR + auto-merge on green CI
-- `pr-autopilot --merge-strategy=rebase --max-iterations=3`
+- `pr-autopilot --review=true --resolve=false` → create PR, post inline review, stop
+- `pr-autopilot --no-merge` → full review/resolve loop, do not merge
+- `pr-autopilot --auto --merge-strategy=rebase --max-iterations=3`
+
+If neither `--auto` nor explicit mode flags are present and the invocation is
+interactive, the orchestrator MAY prompt once: "Which mode? [1] PR only
+[2] PR + review  [3] PR + review + resolve (default)  [4] Auto (full hands-off)".
+In non-interactive mode, default to mode 3.
 
 ---
 
@@ -155,162 +199,319 @@ If `--review=false` → jump to **Phase 5**.
 
 ---
 
-## 4. Phase 2 — Reviewer Subagent
+## 4. Phase 2 — Reviewer Subagent (inline comments)
 
 Spawn one subagent per iteration. Use the `Task` tool with `subagent_type: "general-purpose"` (or `code-reviewer` if available in the harness).
 
-### 4.1 Reviewer prompt template
+**Hard requirement:** every finding must be posted as an **inline comment on the exact line of code** it refers to. A standalone PR comment (not anchored to a line) is **not** an acceptable output, except for the top-level review summary.
+
+### 4.1 How to post inline comments
+
+#### GitHub — single review with inline comments
+
+The Reviewer must build all comments and submit them in **one** review using `gh api`:
+
+```bash
+# 1. Determine commit SHA the comments anchor to (the latest commit on HEAD)
+COMMIT_SHA=$(git rev-parse HEAD)
+
+# 2. POST the review with inline comments in a single call.
+#    Each comment carries: path, line, side ("RIGHT" for added/modified lines,
+#    "LEFT" for removed-only context), body, and severity tag in the body.
+gh api -X POST "repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews" \
+  -f commit_id="$COMMIT_SHA" \
+  -f event="REQUEST_CHANGES" \   # or "COMMENT" if blocker_count == 0
+  -f body="<top-level summary>" \
+  -F "comments[][path]=src/foo.ts"      -F "comments[][line]=42"  -F "comments[][side]=RIGHT" \
+  -F "comments[][body]=[BLOCKER] <title>\n\n**Problem:** ...\n**Why it blocks:** ...\n**Suggested fix:**\n\`\`\`ts\n...\n\`\`\`" \
+  -F "comments[][path]=src/bar.ts"      -F "comments[][line]=88"  -F "comments[][side]=RIGHT" \
+  -F "comments[][body]=[SUGGESTION] ..." \
+  ...
+```
+
+For a multi-line comment, use `start_line` + `start_side` + `line` + `side` instead of just `line`.
+
+The body of every inline comment **must** start with one of:
+`[BLOCKER]`, `[SUGGESTION]`, `[NITPICK]`. This tag is what the Author parses next.
+
+If `gh api` rejects a `line` (e.g. the line is unchanged in the diff), the Reviewer must anchor to the **nearest changed line** in the same hunk and prefix the body with `(near line X)` so the location is clear. Never silently drop a finding.
+
+#### GitLab — discussions on diff position
+
+```bash
+# Need: project_id, MR iid, base_sha, head_sha, start_sha
+# Get them from: glab api projects/:id/merge_requests/<iid>?include_diverged_commits_count=true
+
+glab api -X POST "projects/:id/merge_requests/<MR_IID>/discussions" \
+  -F body="[BLOCKER] ..." \
+  -F position[position_type]=text \
+  -F position[base_sha]=$BASE_SHA \
+  -F position[head_sha]=$HEAD_SHA \
+  -F position[start_sha]=$START_SHA \
+  -F position[new_path]=src/foo.ts \
+  -F position[new_line]=42
+```
+
+Repeat per finding. GitLab does not bundle them into a single review object.
+
+### 4.2 Reviewer prompt template
 
 ```
 You are the Reviewer agent in the pr-autopilot pipeline. You are stateless and have
 no prior context — everything you need is below.
 
 PR: <PR_URL>
+Platform: <github|gitlab>
+PR number / MR iid: <PR_NUMBER>
+Owner/repo (or project_id): <SLUG>
 Base: <BASE>
 Head: <BRANCH>
+Head SHA: <HEAD_SHA>
 Iteration: <N> of <MAX>
 Repo root: <CWD>
 
 YOUR TASK
-Read the full diff (run: git diff <BASE>...<BRANCH>) and the changed files in their
-current state. Evaluate against:
-- Correctness and edge cases
-- Security (injection, secret leakage, authz bypass, OWASP-class issues)
-- Performance (N+1, unbounded loops, blocking I/O on hot paths)
-- Code quality (naming, dead code, premature abstraction, missing error paths
-  at trust boundaries)
-- Consistency with surrounding codebase patterns
-- Test coverage proportional to risk
+1. Read the full diff: git diff <BASE>...<BRANCH>
+2. Read the changed files in their current state.
+3. Evaluate against:
+   - Correctness and edge cases
+   - Security (injection, secret leakage, authz bypass, OWASP-class)
+   - Performance (N+1, unbounded loops, blocking I/O on hot paths)
+   - Code quality (naming, dead code, premature abstraction, missing
+     error paths at trust boundaries)
+   - Consistency with surrounding codebase patterns
+   - Test coverage proportional to risk
 
-For each finding, classify as exactly one of:
-  BLOCKER    — must be fixed before merge (bug, security, regression, broken contract)
-  SUGGESTION — should likely be fixed; reviewer judgment improves quality
-  NITPICK    — optional/aesthetic; safe to ignore
-  APPROVED   — top-level marker only, used when there are zero BLOCKERs
+CLASSIFICATION
+Each finding is exactly one of:
+  BLOCKER    — must be fixed before merge
+  SUGGESTION — should likely be fixed
+  NITPICK    — optional/aesthetic
 
-OUTPUT
-Write a single file at .pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md with this
-exact structure:
+POSTING THE REVIEW (mandatory inline format)
+You MUST post each finding as an INLINE comment anchored to the exact file +
+line number. Do NOT post a single bulk comment with all findings.
+
+GitHub:
+  Build the full list of inline comments and submit them in ONE review via
+  `gh api -X POST repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews` with the
+  `comments[]` array. Use event=REQUEST_CHANGES if any BLOCKER, otherwise
+  event=COMMENT.
+
+GitLab:
+  POST one discussion per finding via
+  `glab api projects/:id/merge_requests/<iid>/discussions` with a `position`
+  block (base_sha, head_sha, start_sha, new_path, new_line).
+
+Each inline comment body MUST start with the severity tag, e.g.:
+
+  [BLOCKER] Missing authz check on /admin/users
+  
+  **Problem:** the handler trusts the X-User header without verification.
+  **Why it blocks:** privilege escalation.
+  **Suggested fix:**
+  ```ts
+  if (!req.session?.isAdmin) return res.status(403).end();
+  ```
+
+If the diff makes a line uncommentable (unchanged context outside the hunk),
+anchor to the nearest CHANGED line in the same hunk and prefix the body with
+`(near line N)`. Never silently drop a finding.
+
+OUTPUT (also write a local artifact)
+Write .pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md with this exact
+front-matter and a list of every finding INCLUDING the comment_id returned
+by the API for each one (you'll need them in the response phase):
 
 ---
 verdict: APPROVED | CHANGES_REQUESTED
 blocker_count: <int>
 suggestion_count: <int>
 nitpick_count: <int>
+review_id: <id returned by GitHub review POST, or "n/a" for GitLab>
 ---
 
 # Review — iteration <N>
 
 ## Summary
-<2–4 sentences>
+<2–4 sentences — same content as the top-level review body posted to the PR>
 
-## Findings
+## Inline findings
 
-### [BLOCKER] <one-line title>
+### [BLOCKER] <title>
 - File: `path/to/file.ts:42`
-- Problem: <what is wrong>
-- Why it blocks: <consequence>
-- Suggested fix: <concrete direction; code if useful>
+- comment_id: <id from API response>
+- url: <html_url from response>
+- Problem: ...
+- Suggested fix: ...
 
-### [SUGGESTION] <title>
-... (same shape)
-
-### [NITPICK] <title>
-... (same shape)
+(repeat per finding, in posting order)
 
 ## Verdict
-APPROVED   ← if and only if blocker_count == 0
-or
-CHANGES_REQUESTED
+APPROVED  (only if blocker_count == 0)
+or CHANGES_REQUESTED
 
-Be specific. Cite exact file paths and line numbers. Do not write speculative findings
-— if you are not sure something is broken, downgrade it to SUGGESTION or omit it.
+Be specific. Do not write speculative findings.
 ```
 
-### 4.2 Orchestrator post-processing
+### 4.3 Orchestrator post-processing
 
 After the Reviewer returns, parse the front-matter of `review-report.md`:
 
-- `verdict: APPROVED` and `blocker_count: 0` → jump to **Phase 5**
-- `verdict: CHANGES_REQUESTED` → proceed to **Phase 3**
-- Malformed front-matter → re-spawn Reviewer once with explicit format reminder; on second failure, escalate to user
+- `verdict: APPROVED` and `blocker_count: 0` → jump to **Phase 5**.
+- `verdict: CHANGES_REQUESTED` and `--resolve=false` → STOP (mode "PR + review"). Print the PR URL and exit.
+- `verdict: CHANGES_REQUESTED` and `--resolve=true` → proceed to **Phase 3**.
+- Malformed front-matter, or any finding without a `comment_id` → re-spawn Reviewer once with explicit format reminder; on second failure, escalate to user.
 
 ---
 
-## 5. Phase 3 — Author Subagent (Response + Fixes)
+## 5. Phase 3 — Author Subagent (Inline replies + Fixes)
 
-### 5.1 Author prompt template
+This phase only runs when `--resolve=true` (default). Otherwise the pipeline stops at the end of Phase 2.
+
+**Hard requirement:** for every inline review comment, the Author must post an inline **reply** on that same comment, stating whether the FIX was applied, refuted, or deferred. A standalone "I addressed everything" PR comment is **not** acceptable.
+
+### 5.1 How to reply to inline comments
+
+#### GitHub — reply to a specific review comment
+
+```bash
+# Reply on an existing pull-request review comment:
+gh api -X POST "repos/{owner}/{repo}/pulls/<PR_NUMBER>/comments/<comment_id>/replies" \
+  -f body="✅ FIXED in <commit_sha> — switched to session.isAdmin guard."
+```
+
+#### GitLab — reply to a discussion
+
+```bash
+glab api -X POST \
+  "projects/:id/merge_requests/<MR_IID>/discussions/<discussion_id>/notes" \
+  -F body="✅ FIXED in <commit_sha>"
+```
+
+The reply body MUST start with one of these status tags:
+
+| Tag | Meaning |
+|-----|---------|
+| `✅ FIXED in <sha>` | Code was changed to address the finding |
+| `🛑 REFUTED` | The finding is factually wrong; reply explains why with code evidence |
+| `⏸ DEFERRED` | Acknowledged, not fixed in this PR; explains the follow-up plan |
+| `🤷 SKIPPED` | Allowed only for NITPICKs the author chose to ignore |
+
+The orchestrator parses these tags to validate that no BLOCKER got `SKIPPED`.
+
+### 5.2 Author prompt template
 
 ```
 You are the Author agent in the pr-autopilot pipeline. You are stateless.
 
 PR: <PR_URL>
-Branch: <BRANCH> (you must commit and push to this branch)
+Platform: <github|gitlab>
+PR number / MR iid: <PR_NUMBER>
+Branch: <BRANCH>  (you must commit and push to this branch)
 Iteration: <N>
 Review report: .pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md
 Repo root: <CWD>
 
 YOUR TASK
-Read the review report. For each finding:
+Read review-report.md. It contains every finding plus its `comment_id`.
+
+For each finding:
 
   BLOCKER    — you MUST address. Either:
                  (a) apply a code fix, or
-                 (b) if the finding is factually wrong, refute it with concrete
+                 (b) if the finding is factually wrong, REFUTE it with concrete
                      evidence (cite the code that already handles the case).
-                 Refusing a BLOCKER without refutation is not allowed.
+               Refusing a BLOCKER without refutation is not allowed.
 
-  SUGGESTION — apply the fix if it is low-risk and aligned with the PR scope.
-               Defer if it expands scope, requires design decisions, or is better
-               handled in a follow-up — explain why and log as tech debt.
+  SUGGESTION — apply if low-risk and within PR scope. Otherwise mark DEFERRED
+               with a clear reason.
 
-  NITPICK    — apply only if trivial; otherwise ignore.
+  NITPICK    — apply only if trivial; otherwise SKIPPED is acceptable.
 
-WORKFLOW
-1. Make code changes file by file. Do not introduce unrelated edits.
-2. Run the project's lint + type-check + tests if commands are obvious from
-   package.json / pyproject.toml / Makefile. Do not invent commands.
-3. Commit using Conventional Commits + Jira if branch matches `<type>/<JIRA>/...`:
+WORKFLOW (per finding, in order)
+
+1. Make the code change (file-scoped; do not introduce unrelated edits).
+2. Stage and commit using Conventional Commits + Jira when applicable:
      fix(JIRA-XXX): Address review iter-<N> — <brief>
-   One commit per logical fix is preferred; squash on merge will collapse them.
-4. Push to origin.
+   Capture the resulting commit SHA.
+3. Post an inline REPLY on the corresponding `comment_id`:
+
+   GitHub:
+     gh api -X POST repos/{owner}/{repo}/pulls/<PR_NUMBER>/comments/<comment_id>/replies \
+       -f body="<status_tag> — <one-line explanation>\n\n<optional: snippet of new code>"
+
+   GitLab:
+     glab api -X POST projects/:id/merge_requests/<iid>/discussions/<discussion_id>/notes \
+       -F body="<status_tag> — ..."
+
+   The reply body MUST start with exactly one of:
+     ✅ FIXED in <sha>
+     🛑 REFUTED
+     ⏸ DEFERRED
+     🤷 SKIPPED   (only valid for NITPICK)
+
+   Resolve the conversation if the platform supports it and the action is
+   FIXED or REFUTED:
+     gh api -X PATCH repos/{owner}/{repo}/pulls/comments/<comment_id> ... (resolve via GraphQL)
+     glab api -X PUT  projects/:id/merge_requests/<iid>/discussions/<discussion_id>?resolved=true
+
+4. After ALL findings are processed, push the branch:
+     git push origin <BRANCH>
+
+VERIFICATION GATE (run BEFORE pushing)
+Detect and run, when commands are obvious from package.json / pyproject.toml /
+Makefile / etc. Do NOT invent commands.
+- lint
+- type-check
+- tests
+
+If any of them regress vs. the pre-iteration baseline, do NOT push and do NOT
+post replies that claim FIXED. Instead, write a failure record into the
+response summary and stop.
 
 OUTPUT
-Write .pr-autopilot/<PR_NUMBER>/iter-<N>/response-summary.md with:
+Write .pr-autopilot/<PR_NUMBER>/iter-<N>/response-summary.md:
 
 ---
 fixed_count: <int>
 deferred_count: <int>
 refuted_count: <int>
+skipped_count: <int>
+push_sha: <sha pushed, or "n/a" if not pushed>
+verification: pass | fail | partial
 ---
 
 # Author Response — iteration <N>
 
 ## Per-finding actions
 
-### [BLOCKER] <title from review>
+### [BLOCKER] <title>
+- comment_id: <id>
 - Action: FIXED | REFUTED
 - Commit: <sha or "n/a">
-- Notes: <what changed or why finding was wrong>
+- Reply posted: <reply url or id>
+- Notes: <what changed or evidence of refutation>
 
 ### [SUGGESTION] <title>
+- comment_id: <id>
 - Action: FIXED | DEFERRED
 - Commit / tech-debt note: ...
+- Reply posted: <reply url or id>
 
-(repeat for all findings; NITPICKs may be grouped)
+(repeat for all findings)
 
 ## Verification
 - lint: pass | fail | not-run (<reason>)
 - type-check: pass | fail | not-run
 - tests: pass | fail | not-run
-
-Do not push if lint/type/tests regressed. Instead, write the failure into the
-response summary and stop.
 ```
 
-### 5.2 Orchestrator post-processing
+### 5.3 Orchestrator post-processing
 
 - Read `response-summary.md`.
-- If verification shows regression → halt, surface logs to user, **do not** loop.
+- If `verification: fail` → halt, surface logs to user, **do not** loop, **do not** merge.
+- Validate: every BLOCKER must have `Action: FIXED` or `REFUTED`. Any BLOCKER with `DEFERRED`/`SKIPPED` → halt and escalate (this is a guardrail violation).
 - If everything green → increment iteration counter, return to **Phase 2** with iteration N+1.
 - After `MAX_ITERATIONS` cycles still not APPROVED → escalate: print summary of remaining BLOCKERs and ask user how to proceed (force merge / abort / extend iterations).
 
@@ -332,11 +533,19 @@ glab mr ci <PR_NUMBER>
 - Initial wait: 15s (let webhooks register).
 - Poll every `CI_POLL_INTERVAL` seconds.
 - After 10 polls with no terminal state, back off to 60s.
-- Hard stop at `CI_TIMEOUT` seconds → ask user.
+- Hard stop at `CI_TIMEOUT` seconds → ask user (or, in `--auto` mode without a TTY, halt with a clear "CI timeout" message and exit non-zero).
 - Terminal states:
-  - All `success`/`neutral` → proceed to **Phase 6**.
-  - Any `failure`/`cancelled`/`timed_out` → fetch failing job logs (`gh run view --log-failed` or `glab ci trace`), surface the last ~80 lines, **stop**. Do not retry automatically.
-  - Mix of pending + success → keep polling.
+  - **All required checks `success`/`neutral`** → proceed to **Phase 6**.
+  - Any `failure`/`cancelled`/`timed_out` → fetch failing job logs (`gh run view --log-failed` or `glab ci trace`), surface the last ~80 lines, **stop**. Do not retry automatically. **Never merge.**
+  - Mix of pending + success → keep polling. **Never merge while any required check is still pending or queued.**
+
+`--auto` does not relax any of these rules — its sole effect is to skip
+human-confirmation prompts. The merge step in Phase 6 is gated on:
+1. `verdict: APPROVED` (or `--review=false`)
+2. Every required check returned a non-failing terminal state
+3. `mergeable=MERGEABLE` (no conflicts, branch protection satisfied)
+
+If any of the three is missing, `--auto` halts with the failing condition.
 
 ### Mergeability check (must also pass)
 
@@ -417,17 +626,23 @@ Re-running the skill on the same branch reads state and resumes at the correct p
 ## 10. Invocation Examples
 
 ```
-# Standard: open PR, review loop, merge on green CI
+# Fully autonomous: review + resolve + wait CI + merge
+pr-autopilot --auto
+
+# Standard (default): open PR, review loop, merge on green CI
 pr-autopilot
+
+# Open PR, post inline review, stop (human will resolve)
+pr-autopilot --review=true --resolve=false
 
 # Skip review entirely, just open and merge when CI passes
 pr-autopilot --review=false
 
-# Open + review, but stop before merge (e.g. for human sign-off)
+# Open + full review loop, but stop before merge (human sign-off)
 pr-autopilot --no-merge
 
-# Tighter loop, rebase merge
-pr-autopilot --max-iterations=3 --merge-strategy=rebase
+# Auto mode with tighter loop and rebase merge
+pr-autopilot --auto --max-iterations=3 --merge-strategy=rebase
 
 # Draft PR (creation only)
 pr-autopilot --draft
@@ -443,10 +658,12 @@ pr-autopilot --base=develop
 Keep terminal output terse. Per phase, emit one line:
 
 ```
+[mode] --auto (full hands-off)
 [1/6] PR #482 created → https://github.com/acme/api/pull/482
-[2/6] Reviewer iter 1 → CHANGES_REQUESTED (2 BLOCKER, 3 SUGGESTION)
-[3/6] Author iter 1 → 2 fixed, 1 deferred, pushed abc1234
+[2/6] Reviewer iter 1 → CHANGES_REQUESTED (2 BLOCKER, 3 SUGGESTION) — 5 inline comments posted
+[3/6] Author iter 1   → 2 fixed, 1 deferred, replies posted, pushed abc1234
 [2/6] Reviewer iter 2 → APPROVED
+[5/6] CI: waiting… 2/4 pending
 [5/6] CI: 4/4 checks green
 [6/6] Merged (squash) → main @ def5678
 ```
