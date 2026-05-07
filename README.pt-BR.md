@@ -57,10 +57,30 @@ Uma [skill do Claude Code](https://docs.claude.com/en/docs/claude-code/skills) q
 
 ## Instalação
 
-A skill é um único arquivo Markdown. Coloque no diretório de skills do Claude Code:
+### Recomendado — um comando com `npx`
 
 ```bash
-# Usuário (disponível em todos os projetos)
+# Instalação no usuário (disponível em todos os projetos)
+npx github:FelipeOFF/pr-autopilot
+
+# Instalação no projeto (só neste repo)
+npx github:FelipeOFF/pr-autopilot --project
+
+# Outras ações
+npx github:FelipeOFF/pr-autopilot --dry-run     # mostra o que seria escrito
+npx github:FelipeOFF/pr-autopilot --uninstall   # remove a cópia instalada
+npx github:FelipeOFF/pr-autopilot --help
+```
+
+O installer copia o `SKILL.md` para `~/.claude/skills/pr-autopilot/`
+(ou `./.claude/skills/pr-autopilot/` com `--project`). Depois de instalar,
+rode `/reload-plugins` dentro do Claude Code (ou reinicie a sessão) para a
+skill ser carregada.
+
+### Manual (sem Node)
+
+```bash
+# Usuário
 mkdir -p ~/.claude/skills/pr-autopilot
 curl -o ~/.claude/skills/pr-autopilot/SKILL.md \
   https://raw.githubusercontent.com/FelipeOFF/pr-autopilot/main/SKILL.md
@@ -69,8 +89,6 @@ curl -o ~/.claude/skills/pr-autopilot/SKILL.md \
 mkdir -p .claude/skills/pr-autopilot
 cp SKILL.md .claude/skills/pr-autopilot/
 ```
-
-Pronto — o Claude Code descobre na próxima sessão.
 
 Ao começar a digitar `/pr-autopilot` no Claude Code, as flags disponíveis
 (`--auto`, `--review`, `--resolve`, `--no-merge`, `--draft`, …) aparecem

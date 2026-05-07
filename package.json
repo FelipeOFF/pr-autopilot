@@ -1,0 +1,39 @@
+{
+  "name": "pr-autopilot",
+  "version": "0.1.0",
+  "description": "Claude Code skill that orchestrates the full Pull Request lifecycle — creation, multi-agent review, automated fixes, CI polling, and auto-merge. Supports GitHub & GitLab.",
+  "bin": {
+    "pr-autopilot": "bin/install.js",
+    "pr-autopilot-install": "bin/install.js"
+  },
+  "files": [
+    "SKILL.md",
+    "bin/install.js",
+    "README.md",
+    "README.pt-BR.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "claude-code",
+    "claude-code-skill",
+    "pull-request",
+    "code-review",
+    "automation",
+    "devtools",
+    "github",
+    "gitlab",
+    "ai-agents"
+  ],
+  "homepage": "https://github.com/FelipeOFF/pr-autopilot#readme",
+  "bugs": {
+    "url": "https://github.com/FelipeOFF/pr-autopilot/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FelipeOFF/pr-autopilot.git"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=14"
+  }
+}
