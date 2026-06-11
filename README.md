@@ -79,28 +79,27 @@ gets picked up.
 
 ### With the `skills` CLI — `npx skills add`
 
-If you use the [`skills`](https://www.npmjs.com/package/skills) marketplace CLI,
-add this skill straight from GitHub:
+If you use the [`skills`](https://www.npmjs.com/package/skills) CLI
+(`vercel-labs/skills`), add this skill straight from GitHub:
 
 ```bash
-# Add from the GitHub repo (user-level: ~/.claude/skills/)
+# Project-level install (./.claude/skills/) — this is the default
 npx skills add FelipeOFF/pr-autopilot
 
-# Project-level install (./.claude/skills/)
-npx skills add FelipeOFF/pr-autopilot --project
-
-# Pin a specific tag/branch/commit
-npx skills add FelipeOFF/pr-autopilot@main
+# User-level install (~/.claude/skills/, available in every project)
+npx skills add FelipeOFF/pr-autopilot -g
 
 # Manage installed skills
 npx skills list                 # list installed skills
 npx skills update pr-autopilot  # pull the latest SKILL.md
+npx skills update               # update every skill the CLI manages
 npx skills remove pr-autopilot  # uninstall
 ```
 
-`npx skills add` clones the repo, drops `SKILL.md` into the skills directory,
-and registers it. As with the other methods, run `/reload-plugins` inside
-Claude Code afterward so `/pr-autopilot` shows up.
+`npx skills add` pulls the repo and links `SKILL.md` into the skills directory.
+Because the CLI tracks what it installs, `npx skills update` can later refresh
+it in place — unlike a manual copy. As with the other methods, run
+`/reload-plugins` inside Claude Code afterward so `/pr-autopilot` shows up.
 
 ### Manual (no Node required)
 

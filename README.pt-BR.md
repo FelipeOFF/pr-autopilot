@@ -79,28 +79,27 @@ skill ser carregada.
 
 ### Com a CLI `skills` — `npx skills add`
 
-Se você usa a CLI de marketplace [`skills`](https://www.npmjs.com/package/skills),
-dá pra adicionar a skill direto do GitHub:
+Se você usa a CLI [`skills`](https://www.npmjs.com/package/skills)
+(`vercel-labs/skills`), dá pra adicionar a skill direto do GitHub:
 
 ```bash
-# Adiciona a partir do repo no GitHub (nível usuário: ~/.claude/skills/)
+# Instalação no nível do projeto (./.claude/skills/) — é o padrão
 npx skills add FelipeOFF/pr-autopilot
 
-# Instalação no nível do projeto (./.claude/skills/)
-npx skills add FelipeOFF/pr-autopilot --project
-
-# Fixar uma tag/branch/commit específico
-npx skills add FelipeOFF/pr-autopilot@main
+# Instalação no nível do usuário (~/.claude/skills/, vale em todo projeto)
+npx skills add FelipeOFF/pr-autopilot -g
 
 # Gerenciar skills instaladas
 npx skills list                 # lista as skills instaladas
 npx skills update pr-autopilot  # baixa o SKILL.md mais recente
+npx skills update               # atualiza toda skill gerenciada pela CLI
 npx skills remove pr-autopilot  # desinstala
 ```
 
-O `npx skills add` clona o repo, coloca o `SKILL.md` no diretório de skills e
-registra. Como nos outros métodos, rode `/reload-plugins` dentro do Claude Code
-depois para o `/pr-autopilot` aparecer.
+O `npx skills add` baixa o repo e linka o `SKILL.md` no diretório de skills.
+Como a CLI rastreia o que instala, o `npx skills update` consegue atualizar
+depois no lugar — diferente de uma cópia manual. Como nos outros métodos, rode
+`/reload-plugins` dentro do Claude Code depois para o `/pr-autopilot` aparecer.
 
 ### Manual (sem Node)
 
