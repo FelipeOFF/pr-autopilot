@@ -10,6 +10,27 @@ End-to-end PR pipeline: **create → review → respond → re-review (loop) →
 
 This skill is **rigid**. Follow the phases in order. Do not skip the verification gates between phases. Coordinate subagents via the `Task` tool (or `Agent` tool depending on harness). Persist intermediate artifacts to `.pr-autopilot/<pr-number>/` so iterations and re-runs are recoverable.
 
+### Writing style — humanize everything posted to the PR
+
+Every piece of prose that lands on the PR — the PR body, each inline review
+comment, each inline reply, and the top-level review summary — **must be passed
+through the `humanizer` skill before posting**. The humanizer strips signs of
+AI-generated writing (rule-of-three, em-dash overuse, inflated symbolism, vague
+attributions, filler phrases, negative parallelisms) so the text reads like a
+human teammate wrote it.
+
+Rule of thumb for every phase that writes prose:
+
+1. Draft the text (PR body / comment / reply).
+2. Invoke the `humanizer` skill on that draft (`Skill` tool, `skill: "humanizer"`),
+   passing the drafted text as input.
+3. Post the humanized output — never the raw draft.
+
+Do **not** humanize: code snippets, severity tags (`[BLOCKER]`, `[SUGGESTION]`,
+`[NITPICK]`), status tags (`✅ FIXED`, `🛑 REFUTED`, `⏸ DEFERRED`, `🤷 SKIPPED`),
+file paths, SHAs, or the front-matter of local artifacts. Humanize only the
+natural-language explanation between those structural markers.
+
 ---
 
 ## 1. Flags / Parameters
@@ -178,6 +199,11 @@ If `--title`/`--body` not provided:
 - [ ] <concrete checks the reviewer can run>
 ```
 
+6. **Humanize the body before creating the PR.** Pass the generated Summary +
+   Changes prose through the `humanizer` skill (`Skill` tool, `skill: "humanizer"`)
+   and use its output as the PR body. Leave the `## Test plan` checklist, file
+   paths, and backticked identifiers intact — humanize only the sentence prose.
+
 ### 3.4 Create PR
 
 ```bash
@@ -319,6 +345,17 @@ If the diff makes a line uncommentable (unchanged context outside the hunk),
 anchor to the nearest CHANGED line in the same hunk and prefix the body with
 `(near line N)`. Never silently drop a finding.
 
+HUMANIZE BEFORE POSTING (mandatory)
+Before you POST anything to the PR, run every natural-language body through the
+`humanizer` skill (Skill tool, skill: "humanizer"):
+  - the top-level review summary, and
+  - the explanation prose inside each inline comment ("Problem", "Why it blocks",
+    and any narrative text).
+Humanize only the prose. Keep the leading severity tag ([BLOCKER]/[SUGGESTION]/
+[NITPICK]), code snippets, file paths, and line refs exactly as drafted. Post the
+humanized text — never the raw draft. This makes the review read like a human
+reviewer wrote it.
+
 OUTPUT (also write a local artifact)
 Write .pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md with this exact
 front-matter and a list of every finding INCLUDING the comment_id returned
@@ -451,6 +488,13 @@ WORKFLOW (per finding, in order)
      🛑 REFUTED
      ⏸ DEFERRED
      🤷 SKIPPED   (only valid for NITPICK)
+
+   HUMANIZE BEFORE POSTING (mandatory): before posting each reply, run its
+   natural-language explanation through the `humanizer` skill (Skill tool,
+   skill: "humanizer"). Keep the leading status tag (✅ FIXED in <sha> / 🛑 REFUTED
+   / ⏸ DEFERRED / 🤷 SKIPPED), the SHA, and any code snippet exactly as drafted —
+   humanize only the prose between them. Post the humanized reply, never the raw
+   draft, so each reply reads like a human author wrote it.
 
    Resolve the conversation if the platform supports it and the action is
    FIXED or REFUTED:

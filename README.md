@@ -77,6 +77,31 @@ The installer copies `SKILL.md` into `~/.claude/skills/pr-autopilot/`
 `/reload-plugins` inside Claude Code (or restart the session) so the skill
 gets picked up.
 
+### With the `skills` CLI — `npx skills add`
+
+If you use the [`skills`](https://www.npmjs.com/package/skills) marketplace CLI,
+add this skill straight from GitHub:
+
+```bash
+# Add from the GitHub repo (user-level: ~/.claude/skills/)
+npx skills add FelipeOFF/pr-autopilot
+
+# Project-level install (./.claude/skills/)
+npx skills add FelipeOFF/pr-autopilot --project
+
+# Pin a specific tag/branch/commit
+npx skills add FelipeOFF/pr-autopilot@main
+
+# Manage installed skills
+npx skills list                 # list installed skills
+npx skills update pr-autopilot  # pull the latest SKILL.md
+npx skills remove pr-autopilot  # uninstall
+```
+
+`npx skills add` clones the repo, drops `SKILL.md` into the skills directory,
+and registers it. As with the other methods, run `/reload-plugins` inside
+Claude Code afterward so `/pr-autopilot` shows up.
+
 ### Manual (no Node required)
 
 ```bash
