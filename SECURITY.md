@@ -35,13 +35,14 @@ We aim to triage within 5 business days.
 These are baked into the orchestration logic. A change that weakens them is a security regression and will be reverted:
 
 1. **No `--no-verify`.** Pre-commit and pre-push hooks always run.
-2. **No `--force` / `--force-push`.** Push rejections halt the pipeline.
-3. **No auto-resolve of merge conflicts.** Stops and surfaces the conflict.
+2. **No blind `--force`.** Conflict resolution merges the base into the feature branch (no history rewrite). The only force permitted is `--force-with-lease` on the *feature* branch when the operator explicitly chose `--merge-strategy=rebase` — never a bare `-f`, never on a protected/base branch.
+3. **Conflicts and CI are resolved, never silently.** With `--resolve`/`--auto`, the Author may resolve merge conflicts and fix failing CI — but a change that would alter a **business rule** (a decision, validation, threshold, price, permission, eligibility, state transition, or domain branch) must be confirmed with the operator via the `groom-me` skill *before* it is made. In a non-interactive run the item is recorded as escalated and the pipeline halts rather than guessing.
 4. **No silent BLOCKER skip.** A `BLOCKER` finding must be either fixed or formally refuted with code-level evidence.
 5. **Verification gate before push.** The Author halts if lint, type-check, or tests regress.
 6. **Never amends pushed commits.** New commits only.
-7. **No automatic retries on CI failure.** Failures surface to the user.
-8. **No editing of CI/CD config or secrets** during the review-response loop unless that is the actual scope of the PR.
+7. **Never merges over a red or pending check, and never disables one.** Under `--resolve`/`--auto` the Author fixes failing CI (bounded by `--max-iterations`) then re-polls; it never disables or skips a required check to go green. Without `--resolve`, CI failures surface to the operator and stop the pipeline.
+8. **Merge is opt-in and gated.** The merge step runs only with `--merge`/`--auto`, and only when every required check is green and the PR is `MERGEABLE`.
+9. **No editing of CI/CD config or secrets** to force a pass, unless that is the actual scope of the PR.
 
 ## Recommended operator practices
 

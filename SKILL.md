@@ -1,12 +1,14 @@
 ---
 name: pr-autopilot
 description: Orchestrates the full lifecycle of a Pull Request — creation, multi-agent code review, automated review response with code fixes, CI monitoring, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "review and merge my branch"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
-argument-hint: "[--auto] [--review=true|false] [--resolve=true|false] [--no-merge] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
+argument-hint: "[--auto] [--review] [--resolve] [--merge] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
 ---
 
 # pr-autopilot
 
-End-to-end PR pipeline: **create → review → respond → re-review (loop) → wait for CI → merge**.
+End-to-end PR pipeline: **create → (review → respond → re-review loop) → resolve conflicts & fix CI → wait for CI → merge**.
+
+**Everything past PR creation is opt-in.** Every boolean flag defaults to `false`. With no flags the skill creates the PR and stops. You switch on each stage explicitly (`--review`, `--resolve`, `--merge`) or turn them all on at once with `--auto`.
 
 This skill is **rigid**. Follow the phases in order. Do not skip the verification gates between phases. Coordinate subagents via the `Task` tool (or `Agent` tool depending on harness). Persist intermediate artifacts to `.pr-autopilot/<pr-number>/` so iterations and re-runs are recoverable.
 
@@ -35,71 +37,88 @@ natural-language explanation between those structural markers.
 
 ## 1. Flags / Parameters
 
-Parse these from the user's invocation. Apply defaults when missing.
+Parse these from the user's invocation. **Everything is opt-in: every boolean flag
+defaults to `false`.** With no flags, `pr-autopilot` creates the PR and stops. You
+turn on each stage explicitly (`--review`, `--resolve`, `--merge`) or turn them all
+on at once with `--auto`.
 
-### Mode flags (the user picks one of four modes)
+### Mode flags (compose them; each stage is opt-in)
 
 | Mode | Flags | Pipeline |
 |------|-------|----------|
-| **PR only** | `--review=false` | Phase 1 → Phase 5 → Phase 6 |
-| **PR + review** | `--review=true --resolve=false` | Phase 1 → Phase 2 (Reviewer posts inline comments) → STOP |
-| **PR + review + resolve** *(default)* | `--review=true --resolve=true` | Phase 1 → Phase 2 → Phase 3 (Author replies inline + commits) → loop → Phase 5 → Phase 6 |
-| **Auto (full hands-off)** | `--auto` | Same as mode 3, but explicit: orchestrator runs the full pipeline end-to-end without prompting, waits for ALL CI checks to pass, and only then merges. Halts on any verification or CI failure. |
+| **PR only** *(default, no flags)* | *(none)* | Phase 1 → STOP. Create the PR, print the URL, exit. Nothing else runs. |
+| **PR + merge** | `--merge` | Phase 1 → Phase 5 (CI) → Phase 6 (merge). No review. |
+| **PR + review** | `--review` | Phase 1 → Phase 2 (Reviewer posts inline comments) → STOP. |
+| **PR + review + resolve** | `--resolve` | Phase 1 → Phase 2 → Phase 3 (Author fixes comments, conflicts and CI) → loop → STOP before merge. Add `--merge` to merge on green CI. |
+| **Auto (full hands-off)** | `--auto` | Everything on: review + resolve + wait ALL CI + merge, no prompts. Resolves merge conflicts and fixes failing CI along the way. Halts or escalates only on a guardrail it must not cross. |
 
-`--auto` is shorthand for `--review=true --resolve=true --no-merge=false`, plus an
-explicit "do not interrupt for confirmation" semantic. It does **not** weaken any
-guardrail: failing tests, failing CI, failing verification, or unresolved BLOCKERs
-still halt the pipeline. The merge step only executes when Phase 5 reports all
-checks green AND the PR is `MERGEABLE`.
+Rules that tie the flags together:
+
+- `--resolve` **implies** `--review` — you cannot resolve comments without a review. Passing `--resolve` alone turns the Reviewer on too.
+- `--merge` is what enables the merge. Without it (and without `--auto`), the pipeline always stops before merging, no matter how green CI is.
+- `--auto` is shorthand for `--review --resolve --merge` plus a "never prompt for confirmation" semantic **and** the aggressive-resolution behavior: in `--auto` (and any `--resolve`) run, the Author resolves merge conflicts and fixes failing CI, not just review comments.
+- `--draft` forces no merge even when `--merge`/`--auto` is set.
+
+`--auto` does **not** weaken any guardrail: a fix that regresses tests, a conflict
+that touches business logic, an unresolved BLOCKER, or a still-red required check
+all halt or escalate. The merge step only executes when Phase 5 reports every
+required check green AND the PR is `MERGEABLE`.
 
 ### All flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--auto` | `false` | Enable fully autonomous mode (review + resolve + wait CI + merge). Sets `--review=true`, `--resolve=true`, `--no-merge=false` and disables interactive prompts. |
-| `--review` | `true` | Run the Reviewer subagent. `false` skips straight to CI + merge. |
-| `--resolve` | `true` | Run the Author subagent that addresses each review comment. Requires `--review=true`. |
-| `--max-iterations` | `2` | Max review→respond cycles before forcing escalation to user. |
+| `--auto` | `false` | Full hands-off. Turns on `--review`, `--resolve`, `--merge`, disables prompts, and lets the Author resolve conflicts + fix CI. |
+| `--review` | `false` | Run the Reviewer subagent (inline comments). |
+| `--resolve` | `false` | Run the Author subagent — addresses review comments, resolves merge conflicts, and fixes failing CI. Implies `--review`. |
+| `--merge` | `false` | Enable auto-merge once every required check is green and the PR is `MERGEABLE`. Without it (or `--auto`) the pipeline stops before merge. |
+| `--max-iterations` | `2` | Max review→respond (and CI-fix) cycles before escalating to the user. |
 | `--merge-strategy` | `squash` | One of `squash`, `merge`, `rebase`. |
 | `--base` | auto-detect | Target branch. Defaults to repo default branch (`main`/`master`/`trunk`). |
-| `--draft` | `false` | Open PR as draft. Skip auto-merge if true. |
+| `--draft` | `false` | Open PR as draft. Forces no merge. |
 | `--platform` | auto-detect | `github` or `gitlab`. Auto-detected from remote URL. |
 | `--ci-timeout` | `1800` | Seconds to wait for checks before bailing. |
 | `--ci-poll-interval` | `30` | Seconds between status polls. Backs off to 60s after 10 polls. |
-| `--no-merge` | `false` | Stop after review approval; do not merge. |
 | `--title` | auto-generated | Override generated title. |
 | `--body` | auto-generated | Override generated body. |
+
+Boolean flags accept a bare form (`--review`) or an explicit value
+(`--review=true` / `--review=false`). The bare form means `true`. An explicit
+`--review=false` is only useful to cancel a flag that `--auto` would otherwise
+turn on (e.g. `--auto --merge=false` → do everything but stop before merge).
 
 ### Invocation flow (decision tree)
 
 ```
 pr-autopilot
    │
-   ├─ --auto ─────────────────────► full hands-off: PR → review → resolve →
-   │                                 wait ALL CI → merge (halts on any failure)
+   ├─ --auto ───────────► full hands-off: PR → review → resolve
+   │                        (comments + conflicts + CI) → wait ALL CI → merge
    │
-   ├─ --review=false ─────────────► PR only (CI + merge)
+   ├─ (no flags) ───────► PR only: create the PR and STOP
    │
-   └─ --review=true (default)
-            │
-            ├─ --resolve=false ───► PR + inline review (stops, waits for human)
-            │
-            └─ --resolve=true ────► PR + inline review + Author addresses each
-                  (default)          comment + reply per comment + CI + merge
+   ├─ --merge ──────────► PR → wait CI → merge (no review)
+   │
+   ├─ --review ─────────► PR → inline review → STOP (human resolves)
+   │
+   └─ --resolve ────────► PR → inline review → Author resolves comments,
+        (implies review)   conflicts and CI → STOP before merge
+                           (add --merge to merge on green CI)
 ```
 
 Invocation examples:
-- `pr-autopilot --auto` → full hands-off pipeline; merges only when CI is green
-- `pr-autopilot` → default pipeline (review + resolve + merge)
-- `pr-autopilot --review=false` → just create PR + auto-merge on green CI
-- `pr-autopilot --review=true --resolve=false` → create PR, post inline review, stop
-- `pr-autopilot --no-merge` → full review/resolve loop, do not merge
+- `pr-autopilot` → create the PR and stop
+- `pr-autopilot --merge` → create PR + auto-merge on green CI (no review)
+- `pr-autopilot --review` → create PR, post inline review, stop
+- `pr-autopilot --resolve` → PR + review + Author resolves everything, stop before merge
+- `pr-autopilot --resolve --merge` → PR + full resolve loop + merge on green CI
+- `pr-autopilot --auto` → full hands-off; merges only when CI is green
 - `pr-autopilot --auto --merge-strategy=rebase --max-iterations=3`
 
-If neither `--auto` nor explicit mode flags are present and the invocation is
-interactive, the orchestrator MAY prompt once: "Which mode? [1] PR only
-[2] PR + review  [3] PR + review + resolve (default)  [4] Auto (full hands-off)".
-In non-interactive mode, default to mode 3.
+If no flags are present and the invocation is interactive, the orchestrator MAY
+prompt once: "Which mode? [1] PR only (default)  [2] PR + merge  [3] PR + review
+[4] PR + review + resolve  [5] Auto (full hands-off)". In non-interactive mode
+with no flags, default to mode 1 (PR only) — create the PR and stop.
 
 ---
 
@@ -116,20 +135,28 @@ In non-interactive mode, default to mode 3.
 │      │                                                          │
 │      ▼                                                          │
 │  Phase 3: Author subagent (Task)    ──► response-summary.md     │
-│      │     (applies fixes, commits, pushes)                     │
+│      │     fixes review comments, resolves merge conflicts,     │
+│      │     fixes failing CI, commits, pushes                    │
+│      │     (escalates business-logic conflicts via groom-me)    │
 │      ▼                                                          │
 │  Phase 4: Loop guard                                            │
 │      │   if Reviewer not APPROVED and iter < max → back to P2   │
 │      │   if iter == max → escalate to user                      │
 │      ▼                                                          │
 │  Phase 5: CI polling (gh/glab)                                  │
-│      │                                                          │
+│      │   if a check fails and --resolve is on → back to P3      │
+│      │   (Author fixes CI), else surface logs and stop          │
 │      ▼                                                          │
-│  Phase 6: Auto-merge                                            │
+│  Phase 6: Auto-merge (only when --merge or --auto)              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 **Subagents are stateless.** Each invocation gets a self-contained prompt with: PR number, diff, base ref, and the path to the artifact it must write. Never delegate "understanding" — the orchestrator reads each artifact and decides next phase.
+
+Phase 3 only runs under `--resolve`/`--auto`. When it runs, the Author's job is
+the whole PR, not just comments: it also resolves merge conflicts and fixes red
+CI, escalating to the user (via the `groom-me` skill) whenever a fix would touch a
+business rule. Phase 6 only runs under `--merge`/`--auto`.
 
 ---
 
@@ -222,7 +249,16 @@ Capture and persist:
 - `PR_URL`
 - Initialize `.pr-autopilot/<PR_NUMBER>/state.json` with `{iteration: 0, status: "created"}`
 
-If `--review=false` → jump to **Phase 5**.
+### 3.5 Post-creation routing
+
+Route by the flags that are on (remember `--resolve` implies `--review`, and
+`--auto` implies all three):
+
+- **No `--review`, `--resolve`, `--merge` or `--auto`** → STOP here. Print the PR
+  URL and exit. This is the default "PR only" mode.
+- **`--review`/`--resolve`/`--auto`** → go to **Phase 2**.
+- **`--merge` only** (no review, no resolve) → go to **Phase 5** (CI), then
+  **Phase 6** (merge).
 
 ---
 
@@ -396,16 +432,30 @@ Be specific. Do not write speculative findings.
 
 After the Reviewer returns, parse the front-matter of `review-report.md`:
 
-- `verdict: APPROVED` and `blocker_count: 0` → jump to **Phase 5**.
-- `verdict: CHANGES_REQUESTED` and `--resolve=false` → STOP (mode "PR + review"). Print the PR URL and exit.
-- `verdict: CHANGES_REQUESTED` and `--resolve=true` → proceed to **Phase 3**.
+- `verdict: APPROVED` and `blocker_count: 0`:
+  - `--resolve`/`--merge`/`--auto` on → jump to **Phase 5** (CI). Under `--resolve`/`--auto`, a red check loops back to the Author to fix it; once every check is green, Phase 6 merges only if `--merge`/`--auto`, otherwise STOP.
+  - review only (none of `--resolve`/`--merge`/`--auto`) → STOP. Print the PR URL and exit (review passed, nothing else requested).
+- `verdict: CHANGES_REQUESTED` and `--resolve` off → STOP (mode "PR + review"). Print the PR URL and exit.
+- `verdict: CHANGES_REQUESTED` and `--resolve` on → proceed to **Phase 3**.
 - Malformed front-matter, or any finding without a `comment_id` → re-spawn Reviewer once with explicit format reminder; on second failure, escalate to user.
 
 ---
 
-## 5. Phase 3 — Author Subagent (Inline replies + Fixes)
+## 5. Phase 3 — Author Subagent (Resolve everything: comments, conflicts, CI)
 
-This phase only runs when `--resolve=true` (default). Otherwise the pipeline stops at the end of Phase 2.
+This phase only runs when `--resolve` (or `--auto`) is set. Otherwise the pipeline stops at the end of Phase 2.
+
+The Author owns the **whole PR**, not just the review comments. Its job is to make
+the PR clean and mergeable. It has three responsibilities, in this order:
+
+1. **Review comments** — reply to and address every inline finding (§5.1).
+2. **Merge conflicts** — if the PR conflicts with the base branch, resolve them (§5.2).
+3. **Failing CI** — if any required check is red, diagnose and fix it (§5.3).
+
+For (2) and (3) the Author must respect the **business-logic escalation
+protocol** (§5.4): it never silently changes a business rule. When a conflict or a
+CI fix would alter what the software decides, allows, blocks, or charges, it stops
+and consults the user through the `groom-me` skill first.
 
 **Hard requirement:** for every inline review comment, the Author must post an inline **reply** on that same comment, stating whether the FIX was applied, refuted, or deferred. A standalone "I addressed everything" PR comment is **not** acceptable.
 
@@ -438,7 +488,103 @@ The reply body MUST start with one of these status tags:
 
 The orchestrator parses these tags to validate that no BLOCKER got `SKIPPED`.
 
-### 5.2 Author prompt template
+### 5.2 Resolve merge conflicts
+
+If the PR conflicts with its base branch, the Author resolves the conflict on the
+**feature branch** — never by rewriting the base, never with a blind `--force`.
+
+**Mechanic (no history rewrite, no force-push):**
+
+```bash
+git fetch origin
+git merge origin/<BASE>          # brings base into the feature branch
+# → resolve each conflicted file, then:
+git add <resolved files>
+git commit --no-edit             # keep the standard merge-commit message
+# verification gate (see §5.5) must pass, then:
+git push origin <BRANCH>         # normal push — the merge commit fast-forwards cleanly
+```
+
+`git merge origin/<BASE>` is the default because it needs no force-push. Only when
+the user explicitly asked for a rebased history (`--merge-strategy=rebase`) may the
+Author rebase and `git push --force-with-lease origin <BRANCH>` — and **only on the
+feature branch, never on a protected/base branch**, never a blind `-f`.
+
+**How to resolve each conflict (in this order — user is the last resort):**
+
+1. **Read the code.** Open both sides of the conflict and the surrounding file.
+   Read the git history of the hunk (`git log -L`, `git blame`) to understand why
+   each side changed. Prefer the resolution that keeps both intents when they don't
+   actually collide.
+2. **Consult memory.** If the harness exposes a shared-memory tool (e.g. a
+   `supermemory` MCP or similar), search it for prior decisions about the
+   conflicting file or rule before guessing — scope the query to the project's
+   memory. A recorded past decision outranks a fresh guess.
+3. **Escalate on business logic or hard conflicts** (§5.4). If the conflict is not
+   an obvious mechanical merge, OR it touches a business rule that must not change,
+   STOP and run `groom-me` before resolving. Do not pick a side of a business-rule
+   conflict on your own.
+
+If the conflict cannot be resolved safely (business rule unclear and the user is
+unreachable in a non-interactive run), do **not** guess. Record it in the response
+summary as `conflict: escalated` and halt.
+
+### 5.3 Fix failing CI
+
+If a required check is red, the Author diagnoses and fixes it — it does not just
+surface the log and give up.
+
+```bash
+# GitHub — pull the failing job logs
+gh pr checks <PR_NUMBER> --json name,status,conclusion,link
+gh run view --log-failed                 # last failing run's failing steps
+
+# GitLab
+glab ci status
+glab ci trace                            # trace the failing job
+```
+
+Workflow per failing check:
+
+1. Read the failing job log; identify the root cause (failing test, lint/type
+   error, build break, flaky infra).
+2. **Reproduce locally** when the command is obvious from `package.json` /
+   `pyproject.toml` / `Makefile` / CI config. Do **not** invent commands.
+3. Fix the code (file-scoped). If the fix would change a business rule, escalate
+   via `groom-me` first (§5.4).
+4. Run the **verification gate** (§5.5) — the fix must not regress lint/types/tests.
+5. Commit (`fix(JIRA-XXX): fix CI — <brief>`) and push.
+6. Re-poll CI (this is the loop back from Phase 5). Repeat up to `--max-iterations`
+   attempts, then escalate to the user with the remaining red checks.
+
+If a check is red for a reason the Author cannot fix from the code (e.g. missing
+secret, external outage, infra-only failure), it records `ci: escalated` with the
+reason and halts — it never merges over a red required check, and never disables a
+check to go green.
+
+### 5.4 Business-logic escalation protocol (`groom-me`)
+
+The Author must **never silently change a business rule.** When resolving a
+conflict (§5.2) or fixing CI (§5.3), if the change would alter **what the software
+decides, allows, blocks, or charges** — an `if`/`else`/`switch`, a guard clause, a
+validation, an eligibility/pricing/permission/discount check, a state transition,
+a threshold or limit, or anything in a `domain/`/`rules/`/`policy/`/business layer
+— it STOPS and consults the user **before** making the change:
+
+1. Invoke the `groom-me` skill (`Skill` tool, `skill: "groom-me"`). It runs a
+   short, non-technical interview (one decision per question, via `AskUserQuestion`)
+   that confirms the intended behavior in plain language.
+2. Apply exactly what the user confirms — nothing assumed, nothing extra.
+3. If `groom-me` is unavailable in the harness, fall back to asking the user
+   directly with `AskUserQuestion`, framed in the same non-technical way.
+
+In a non-interactive run where the user cannot be reached, a business-logic
+conflict/fix is **not** auto-resolved: record it as `escalated` and halt with a
+clear pointer to what needs a human decision. Mechanical conflicts (imports,
+lockfiles, formatting, non-behavioral merges) and non-behavioral CI fixes do not
+need `groom-me` — resolve those directly.
+
+### 5.5 Author prompt template
 
 ```
 You are the Author agent in the pr-autopilot pipeline. You are stateless.
@@ -446,62 +592,111 @@ You are the Author agent in the pr-autopilot pipeline. You are stateless.
 PR: <PR_URL>
 Platform: <github|gitlab>
 PR number / MR iid: <PR_NUMBER>
+Owner/repo (or project_id): <SLUG>
 Branch: <BRANCH>  (you must commit and push to this branch)
-Iteration: <N>
-Review report: .pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md
+Base: <BASE>
+Iteration: <N>  of <MAX>
+Trigger: <review | ci-fix>   (why you were spawned this round)
+Review report: .pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md   (present when Trigger=review)
 Repo root: <CWD>
 
-YOUR TASK
-Read review-report.md. It contains every finding plus its `comment_id`.
+You own the whole PR, not just the comments. Make it clean and MERGEABLE. Do the
+parts that apply this round, in this order: (A) review comments, (B) merge
+conflicts, (C) failing CI.
+
+GOLDEN RULE — never silently change a business rule.
+Before you resolve a conflict or write a CI fix that would alter WHAT the software
+decides, allows, blocks, or charges (an if/else/switch, a guard, a validation, an
+eligibility/pricing/permission/discount check, a state transition, a threshold or
+limit, or anything in a domain/rules/policy/business layer), STOP and confirm the
+intended behavior with the user FIRST by invoking the `groom-me` skill (Skill tool,
+skill: "groom-me"). Apply exactly what they confirm. If groom-me is unavailable,
+ask directly with AskUserQuestion in the same plain, non-technical language. In a
+non-interactive run where the user can't be reached, do NOT guess — record it as
+`escalated` and halt. Mechanical changes (imports, lockfiles, formatting,
+non-behavioral merges/fixes) do not need groom-me.
+
+Before guessing at a conflict resolution, if the harness exposes a shared-memory
+tool (e.g. a `supermemory` MCP or similar), search it for a prior decision about
+the conflicting file or rule, scoped to the project's memory. A recorded decision
+outranks a guess.
+
+──────────────────────────────────────────────────────────────────────────────
+(A) REVIEW COMMENTS  (only when Trigger=review; read review-report.md)
+Read review-report.md — it contains every finding plus its `comment_id`.
 
 For each finding:
-
-  BLOCKER    — you MUST address. Either:
-                 (a) apply a code fix, or
-                 (b) if the finding is factually wrong, REFUTE it with concrete
-                     evidence (cite the code that already handles the case).
-               Refusing a BLOCKER without refutation is not allowed.
-
-  SUGGESTION — apply if low-risk and within PR scope. Otherwise mark DEFERRED
-               with a clear reason.
-
+  BLOCKER    — you MUST address. Either (a) apply a code fix, or (b) if the finding
+               is factually wrong, REFUTE it with concrete evidence (cite the code
+               that already handles the case). Refusing a BLOCKER without
+               refutation is not allowed.
+  SUGGESTION — apply if low-risk and within PR scope. Otherwise mark DEFERRED with
+               a clear reason.
   NITPICK    — apply only if trivial; otherwise SKIPPED is acceptable.
 
-WORKFLOW (per finding, in order)
-
+Per finding, in order:
 1. Make the code change (file-scoped; do not introduce unrelated edits).
 2. Stage and commit using Conventional Commits + Jira when applicable:
      fix(JIRA-XXX): Address review iter-<N> — <brief>
    Capture the resulting commit SHA.
 3. Post an inline REPLY on the corresponding `comment_id`:
-
-   GitHub:
-     gh api -X POST repos/{owner}/{repo}/pulls/<PR_NUMBER>/comments/<comment_id>/replies \
-       -f body="<status_tag> — <one-line explanation>\n\n<optional: snippet of new code>"
-
-   GitLab:
-     glab api -X POST projects/:id/merge_requests/<iid>/discussions/<discussion_id>/notes \
-       -F body="<status_tag> — ..."
-
+     GitHub:
+       gh api -X POST repos/{owner}/{repo}/pulls/<PR_NUMBER>/comments/<comment_id>/replies \
+         -f body="<status_tag> — <one-line explanation>\n\n<optional: snippet of new code>"
+     GitLab:
+       glab api -X POST projects/:id/merge_requests/<iid>/discussions/<discussion_id>/notes \
+         -F body="<status_tag> — ..."
    The reply body MUST start with exactly one of:
-     ✅ FIXED in <sha>
-     🛑 REFUTED
-     ⏸ DEFERRED
-     🤷 SKIPPED   (only valid for NITPICK)
+     ✅ FIXED in <sha>   🛑 REFUTED   ⏸ DEFERRED   🤷 SKIPPED (NITPICK only)
 
-   HUMANIZE BEFORE POSTING (mandatory): before posting each reply, run its
-   natural-language explanation through the `humanizer` skill (Skill tool,
-   skill: "humanizer"). Keep the leading status tag (✅ FIXED in <sha> / 🛑 REFUTED
-   / ⏸ DEFERRED / 🤷 SKIPPED), the SHA, and any code snippet exactly as drafted —
+   HUMANIZE BEFORE POSTING (mandatory): run each reply's natural-language
+   explanation through the `humanizer` skill (Skill tool, skill: "humanizer").
+   Keep the leading status tag, the SHA, and any code snippet exactly as drafted —
    humanize only the prose between them. Post the humanized reply, never the raw
-   draft, so each reply reads like a human author wrote it.
+   draft.
 
-   Resolve the conversation if the platform supports it and the action is
-   FIXED or REFUTED:
+   Resolve the conversation if the platform supports it and the action is FIXED or
+   REFUTED:
      gh api -X PATCH repos/{owner}/{repo}/pulls/comments/<comment_id> ... (resolve via GraphQL)
      glab api -X PUT  projects/:id/merge_requests/<iid>/discussions/<discussion_id>?resolved=true
 
-4. After ALL findings are processed, push the branch:
+──────────────────────────────────────────────────────────────────────────────
+(B) MERGE CONFLICTS  (whenever the PR conflicts with base)
+Resolve on the FEATURE branch, no history rewrite, no force-push:
+     git fetch origin
+     git merge origin/<BASE>          # base into feature branch
+     # resolve each conflicted file (see the resolution ladder below), then:
+     git add <resolved files>
+     git commit --no-edit
+Resolution ladder (user is the LAST resort):
+  1. Read both sides + the file + git history (git log -L / git blame). Keep both
+     intents when they don't actually collide.
+  2. Consult memory (supermemory, all buckets) for a prior decision.
+  3. If the conflict isn't an obvious mechanical merge, OR touches a business rule
+     → apply the GOLDEN RULE (groom-me) before picking a side.
+Only if the user explicitly chose `--merge-strategy=rebase` may you rebase and
+`git push --force-with-lease origin <BRANCH>` — feature branch only, never base,
+never a blind `-f`. If a conflict can't be resolved safely and the user is
+unreachable, record `conflict: escalated` and halt.
+
+──────────────────────────────────────────────────────────────────────────────
+(C) FAILING CI  (whenever a required check is red)
+     gh pr checks <PR_NUMBER> --json name,status,conclusion,link
+     gh run view --log-failed          # GitHub — failing steps of the last run
+     glab ci status && glab ci trace    # GitLab
+Per failing check:
+  1. Read the log, find the root cause.
+  2. Reproduce locally when the command is obvious from package.json /
+     pyproject.toml / Makefile / CI config. Do NOT invent commands.
+  3. Fix the code (file-scoped). Business-rule fix → GOLDEN RULE (groom-me) first.
+  4. Run the VERIFICATION GATE (below). Commit `fix(JIRA-XXX): fix CI — <brief>`.
+If a check is red for something you can't fix from code (missing secret, external
+outage, infra-only failure), record `ci: escalated` with the reason and halt.
+Never merge over a red required check. Never disable/skip a check to go green.
+
+──────────────────────────────────────────────────────────────────────────────
+PUSH
+After all applicable parts are done, push the branch:
      git push origin <BRANCH>
 
 VERIFICATION GATE (run BEFORE pushing)
@@ -510,10 +705,8 @@ Makefile / etc. Do NOT invent commands.
 - lint
 - type-check
 - tests
-
-If any of them regress vs. the pre-iteration baseline, do NOT push and do NOT
-post replies that claim FIXED. Instead, write a failure record into the
-response summary and stop.
+If any of them regress vs. the pre-iteration baseline, do NOT push and do NOT post
+replies that claim FIXED. Write a failure record into the response summary and stop.
 
 OUTPUT
 Write .pr-autopilot/<PR_NUMBER>/iter-<N>/response-summary.md:
@@ -523,6 +716,9 @@ fixed_count: <int>
 deferred_count: <int>
 refuted_count: <int>
 skipped_count: <int>
+conflict: none | resolved | escalated
+ci: green | fixed | escalated | not-run
+groom_me_consultations: <int>
 push_sha: <sha pushed, or "n/a" if not pushed>
 verification: pass | fail | partial
 ---
@@ -546,23 +742,37 @@ verification: pass | fail | partial
 
 (repeat for all findings)
 
+## Conflict resolution
+- Status: none | resolved | escalated
+- Files: <conflicted paths, or "n/a">
+- How resolved: <merge base / rebase>; <groom-me consulted? decision applied>
+
+## CI fixes
+- Status: green | fixed | escalated | not-run
+- Checks fixed: <name → root cause → fix commit>
+- Escalated: <check name + why, or "n/a">
+
 ## Verification
 - lint: pass | fail | not-run (<reason>)
 - type-check: pass | fail | not-run
 - tests: pass | fail | not-run
 ```
 
-### 5.3 Orchestrator post-processing
+### 5.6 Orchestrator post-processing
 
 - Read `response-summary.md`.
 - If `verification: fail` → halt, surface logs to user, **do not** loop, **do not** merge.
+- If `conflict: escalated` or `ci: escalated` → halt and surface exactly what needs a human decision (the Author already consulted `groom-me` where it could). Do **not** merge.
 - Validate: every BLOCKER must have `Action: FIXED` or `REFUTED`. Any BLOCKER with `DEFERRED`/`SKIPPED` → halt and escalate (this is a guardrail violation).
 - If everything green → increment iteration counter, return to **Phase 2** with iteration N+1.
-- After `MAX_ITERATIONS` cycles still not APPROVED → escalate: print summary of remaining BLOCKERs and ask user how to proceed (force merge / abort / extend iterations).
+- After `MAX_ITERATIONS` cycles still not APPROVED (or CI still red) → escalate: print summary of remaining BLOCKERs / red checks and ask user how to proceed (extend iterations / abort). Never force a merge past a guardrail.
 
 ---
 
 ## 6. Phase 5 — CI Polling
+
+Runs when `--resolve`, `--merge`, or `--auto` is set — to drive CI green (resolve)
+and/or to merge. A review-only run (`--review` alone) never reaches this phase.
 
 ```bash
 # GitHub
@@ -580,17 +790,21 @@ glab mr ci <PR_NUMBER>
 - After 10 polls with no terminal state, back off to 60s.
 - Hard stop at `CI_TIMEOUT` seconds → ask user (or, in `--auto` mode without a TTY, halt with a clear "CI timeout" message and exit non-zero).
 - Terminal states:
-  - **All required checks `success`/`neutral`** → proceed to **Phase 6**.
-  - Any `failure`/`cancelled`/`timed_out` → fetch failing job logs (`gh run view --log-failed` or `glab ci trace`), surface the last ~80 lines, **stop**. Do not retry automatically. **Never merge.**
+  - **All required checks `success`/`neutral`** → proceed to **Phase 6** (merge) if `--merge`/`--auto`, otherwise STOP and print the green PR URL.
+  - Any `failure`/`cancelled`/`timed_out`:
+    - **`--resolve`/`--auto` on** → loop back to **Phase 3** with `Trigger=ci-fix`. The Author reads the failing logs, fixes the code (escalating business-logic fixes via `groom-me`), pushes, and CI is re-polled. Bounded by `--max-iterations` CI-fix attempts; after that, surface the remaining red checks and escalate to the user. **Never merge over a red check.**
+    - **otherwise** → fetch failing job logs (`gh run view --log-failed` or `glab ci trace`), surface the last ~80 lines, **stop**. Do not retry automatically. **Never merge.**
   - Mix of pending + success → keep polling. **Never merge while any required check is still pending or queued.**
 
-`--auto` does not relax any of these rules — its sole effect is to skip
-human-confirmation prompts. The merge step in Phase 6 is gated on:
-1. `verdict: APPROVED` (or `--review=false`)
-2. Every required check returned a non-failing terminal state
-3. `mergeable=MERGEABLE` (no conflicts, branch protection satisfied)
+`--auto` does not relax any of these rules — its effect is to skip
+human-confirmation prompts and to let the Author fix red CI (above). The merge
+step in Phase 6 is gated on:
+1. `--merge` or `--auto` is set (merge was requested)
+2. `verdict: APPROVED` (when `--review` ran) — if review was off, this gate is N/A
+3. Every required check returned a non-failing terminal state
+4. `mergeable=MERGEABLE` (no conflicts, branch protection satisfied)
 
-If any of the three is missing, `--auto` halts with the failing condition.
+If any applicable gate is missing, halt with the failing condition (no merge).
 
 ### Mergeability check (must also pass)
 
@@ -600,11 +814,18 @@ gh pr view <PR_NUMBER> --json mergeable,mergeStateStatus
 # states: MERGEABLE / CONFLICTING / UNKNOWN
 ```
 
-`CONFLICTING` → stop, ask user to resolve. Do not attempt auto-rebase.
+`CONFLICTING`:
+- **`--resolve`/`--auto` on** → loop back to **Phase 3** so the Author resolves the
+  conflict on the feature branch (merge base in, §5.2), consulting `groom-me` for
+  any business-rule conflict. Re-check mergeability afterward.
+- **otherwise** → stop, ask the user to resolve. Do not attempt auto-rebase.
 
 ---
 
 ## 7. Phase 6 — Merge
+
+Runs **only** when `--merge` or `--auto` is set (and never when `--draft`). Without
+one of those, the pipeline has already stopped before this phase.
 
 ```bash
 # GitHub
@@ -620,7 +841,7 @@ glab mr merge <PR_NUMBER> \
   --remove-source-branch --yes
 ```
 
-Skip merge if `--no-merge` or `--draft`. Update `state.json` to `merged` and report PR URL + merge SHA to the user.
+Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `state.json` to `merged` and report PR URL + merge SHA to the user.
 
 ---
 
@@ -633,8 +854,12 @@ Skip merge if `--no-merge` or `--draft`. Update `state.json` to `merged` and rep
 | Push rejected (non-fast-forward) | Stop, ask user — do not force-push |
 | Author agent breaks lint/tests | Halt loop, surface logs |
 | Reviewer never approves (max iter hit) | Escalate with remaining BLOCKERs summary |
-| CI fails | Surface failing job logs, stop |
-| Merge conflict | Stop, ask user — never auto-resolve |
+| CI fails, `--resolve`/`--auto` on | Author fixes it (Phase 3, `Trigger=ci-fix`), re-poll; escalate after `--max-iterations` |
+| CI fails, resolve off | Surface failing job logs, stop |
+| Merge conflict, `--resolve`/`--auto` on | Author resolves on the feature branch (merge base in, §5.2); business-rule conflicts go through `groom-me` first |
+| Merge conflict, resolve off | Stop, ask user — do not auto-resolve |
+| Conflict/CI fix would change a business rule | Consult the user via the `groom-me` skill before changing it; in a non-interactive run, record `escalated` and halt |
+| Business-rule conflict, user unreachable | Do not guess — record `escalated`, halt with what needs a human decision |
 | Required reviewers / branch protection blocks merge | Stop, surface the rule that blocks |
 | `gh`/`glab` not installed | Abort preflight with install hint |
 | Detached HEAD | Abort preflight |
@@ -642,7 +867,11 @@ Skip merge if `--no-merge` or `--draft`. Update `state.json` to `merged` and rep
 | Unsigned commit rejected by hook | Surface hook output, do not retry with `--no-verify` |
 | Subagent returns malformed artifact | Retry once with explicit format reminder, then escalate |
 
-**Never** use `--no-verify`, `--force`, or `--force-push`. **Never** silently skip a BLOCKER.
+**Never** use `--no-verify` or a blind `--force`/`-f`. Conflict resolution merges
+the base into the feature branch (no history rewrite); the only force allowed is
+`--force-with-lease` on the **feature** branch when the user explicitly chose
+`--merge-strategy=rebase` — never on a protected/base branch. **Never** silently
+skip a BLOCKER, and **never** silently change a business rule — `groom-me` first.
 
 ---
 
@@ -661,7 +890,9 @@ merge.json                       # post-merge metadata
 ```
 
 `state.json.status` transitions:
-`created → reviewing → responding → ci_pending → merging → merged`
+`created → reviewing → responding → resolving_conflict → fixing_ci → ci_pending → merging → merged`
+or any → `stopped` (PR-only / review-only run finished as intended)
+or any → `escalated` with `reason` (needs a human decision, e.g. a business-rule conflict)
 or any → `aborted` with `reason`.
 
 Re-running the skill on the same branch reads state and resumes at the correct phase.
@@ -671,20 +902,23 @@ Re-running the skill on the same branch reads state and resumes at the correct p
 ## 10. Invocation Examples
 
 ```
-# Fully autonomous: review + resolve + wait CI + merge
-pr-autopilot --auto
-
-# Standard (default): open PR, review loop, merge on green CI
+# Default (no flags): open the PR and stop
 pr-autopilot
 
+# Fully autonomous: review + resolve (comments + conflicts + CI) + wait CI + merge
+pr-autopilot --auto
+
+# Open PR + auto-merge on green CI, no review
+pr-autopilot --merge
+
 # Open PR, post inline review, stop (human will resolve)
-pr-autopilot --review=true --resolve=false
+pr-autopilot --review
 
-# Skip review entirely, just open and merge when CI passes
-pr-autopilot --review=false
+# Full review + resolve loop (fixes comments, conflicts, CI), stop before merge
+pr-autopilot --resolve
 
-# Open + full review loop, but stop before merge (human sign-off)
-pr-autopilot --no-merge
+# Full resolve loop + merge on green CI
+pr-autopilot --resolve --merge
 
 # Auto mode with tighter loop and rebase merge
 pr-autopilot --auto --max-iterations=3 --merge-strategy=rebase
@@ -693,7 +927,7 @@ pr-autopilot --auto --max-iterations=3 --merge-strategy=rebase
 pr-autopilot --draft
 
 # Override base branch
-pr-autopilot --base=develop
+pr-autopilot --merge --base=develop
 ```
 
 ---
@@ -707,10 +941,16 @@ Keep terminal output terse. Per phase, emit one line:
 [1/6] PR #482 created → https://github.com/acme/api/pull/482
 [2/6] Reviewer iter 1 → CHANGES_REQUESTED (2 BLOCKER, 3 SUGGESTION) — 5 inline comments posted
 [3/6] Author iter 1   → 2 fixed, 1 deferred, replies posted, pushed abc1234
+[3/6] Author iter 1   → conflict in `pricing.ts` resolved (merged base, groom-me confirmed) def5678
 [2/6] Reviewer iter 2 → APPROVED
 [5/6] CI: waiting… 2/4 pending
+[5/6] CI: `unit` failed → Author fix iter 1: flaky assert corrected, pushed 9ab0cd1
 [5/6] CI: 4/4 checks green
-[6/6] Merged (squash) → main @ def5678
+[6/6] Merged (squash) → main @ ef01234
 ```
 
-On any halt, print: phase, reason, the artifact path the user should inspect, and 1–2 suggested next actions.
+The `[mode]` line reflects the flags in play — e.g. `PR only (no flags)`,
+`--merge`, `--review`, `--resolve`, or `--auto (full hands-off)`. Phases that don't
+run for the chosen mode are simply absent from the output.
+
+On any halt, print: phase, reason, the artifact path the user should inspect, and 1–2 suggested next actions. On an `escalated` halt (business-rule conflict / unfixable CI), name exactly what needs a human decision.

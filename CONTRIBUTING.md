@@ -17,7 +17,7 @@ Thanks for the interest. This is a small project — clear, small contributions 
 
 ## What we will likely decline
 
-- Bypassing safety guardrails (`--no-verify`, force-push, auto conflict resolution).
+- Bypassing safety guardrails (`--no-verify`, a blind `--force`, merging over a red check, or resolving a **business-rule** conflict/CI failure without the `groom-me` confirmation). Note: mechanical conflict resolution and CI fixing *are* supported under `--resolve`/`--auto` — what we decline is weakening the guardrails around them.
 - Vendor lock-in to a specific CI provider.
 - Network calls outside `gh`/`glab`/`git`.
 - Heavy frameworks. The skill is a single Markdown file by design.
