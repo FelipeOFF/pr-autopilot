@@ -1,7 +1,7 @@
 {
   "name": "pr-autopilot",
-  "version": "0.1.0",
-  "description": "Claude Code skill that orchestrates the full Pull Request lifecycle — creation, multi-agent review, automated fixes, CI polling, and auto-merge. Supports GitHub & GitLab.",
+  "version": "0.2.0",
+  "description": "Claude Code skill that orchestrates the full Pull Request lifecycle — creation, multi-agent review, triage of every comment already on the PR (human and bot), automated fixes with inline replies, conflict resolution, CI failure attribution and repair, and auto-merge. Supports GitHub & GitLab.",
   "bin": {
     "pr-autopilot": "bin/install.js",
     "pr-autopilot-install": "bin/install.js"

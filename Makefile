@@ -30,3 +30,8 @@ check:
 	@grep -q '^name: $(SKILL_NAME)$$' SKILL.md || (echo "FAIL: name mismatch" && exit 1)
 	@grep -q '^argument-hint:' SKILL.md || (echo "FAIL: missing argument-hint" && exit 1)
 	@echo "✅ SKILL.md frontmatter looks valid"
+	@refs=$$(grep -o '§[0-9]*\.[0-9]*' SKILL.md | tr -d '§' | sort -u); \
+	 for r in $$refs; do \
+	   grep -q "^### $$r " SKILL.md || { echo "FAIL: dangling cross-reference §$$r"; exit 1; }; \
+	 done; \
+	 echo "✅ SKILL.md section cross-refs resolve"
