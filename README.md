@@ -47,8 +47,10 @@ Stages ②–⑥ are opt-in. With no flags the run ends after ①.
 - **Opt-in stages** — every flag defaults to `false`. Bare `pr-autopilot` opens the PR and stops; you turn on review, resolve, and merge as you need them.
 - **Auto title + body** from commits and diff, following Conventional Commits + Jira.
 - **Multi-agent review loop** with structured findings: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
+- **Writes like a person, codes like a lazy senior** — every word posted to the PR goes through [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) and every line of code through [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). No `✅ FIXED` stamps, no `[BLOCKER]` brackets, no emoji openers: comments read like a teammate wrote them, and the machine state rides in an invisible HTML marker. Both skills are also restated inside the skill, so a bare harness without them behaves the same.
+- **Reviews for over-engineering, not just bugs** — the Reviewer carries the ponytail lens: an abstraction with one caller, a dependency added for three lines, a helper reimplemented when the repo already has one. "Delete this" is a valid finding.
 - **Author with veto power** — the Author can refute a wrong BLOCKER with evidence instead of blindly applying it.
-- **Reads every comment on the PR, not just its own** — with `--resolve`, the Author pulls inline comments, top-level comments and review verdicts from humans *and* bots (Copilot, CodeRabbit, Sonar), classifies each one (critique / question / noise / already handled), infers a severity, and replies inline to each with `✅ FIXED` / `🛑 REFUTED` / `⏸ DEFERRED` / `🤷 SKIPPED` / `💬 ANSWERED`. Its own past replies are read as state, so it never loops answering itself.
+- **Reads every comment on the PR, not just its own** — with `--resolve`, the Author pulls inline comments, top-level comments and review verdicts from humans *and* bots (Copilot, CodeRabbit, Sonar), classifies each one (critique / question / noise / already handled), infers a severity, and replies inline to each in plain language. Its own past replies are read as state, so it never loops answering itself.
 - **Resolves the whole PR** — with `--resolve`/`--auto`, the Author also resolves **merge conflicts** (merging base into the feature branch, no force-push) and **fixes failing CI** (reads the logs, patches the code, re-runs verification, pushes).
 - **Attributes CI failures before touching them** — it checks whether the failing file is in your diff, whether the same job fails on the base branch and on other open PRs, and whether the log shows a missing secret or a network timeout. Your breakage gets fixed. Someone else's never gets papered over with a skipped test or a random pin.
 - **Says "this isn't my PR's fault" only with your permission** — and only once. Before posting that comment it asks you, showing the exact text; it looks for its own `<!-- pr-autopilot:ci-triage:<check> -->` marker so a re-run never double-posts; and in `--auto` it stays quiet and hands you the drafted text instead.
@@ -225,23 +227,27 @@ Every boolean flag defaults to `false` — pass it (bare, or `=true`) to turn th
 
 ### Inline review & inline replies
 
-The Reviewer **never** posts a single bulk PR comment. Every finding is posted as an inline comment on the exact file + line, with a severity tag:
+The Reviewer **never** posts a single bulk PR comment. Every finding is posted as an inline comment on the exact file + line. It opens with the words a reviewer says out loud — `Blocking:`, `Suggestion:`, `nit:` — and closes with an invisible marker that carries the severity for the pipeline:
 
-- `[BLOCKER]` — must be fixed before merge
-- `[SUGGESTION]` — should likely be fixed
-- `[NITPICK]` — optional
+```html
+<!-- pr-autopilot:severity=blocker -->
+```
 
-The Author replies on each inline comment with one of:
+The Author replies on each inline comment in plain language, and closes the reply with the action marker:
 
-- `✅ FIXED in <sha>` — code was changed
-- `🛑 REFUTED` — finding is wrong, with code evidence
-- `⏸ DEFERRED` — acknowledged, follow-up planned
-- `🤷 SKIPPED` — only allowed for NITPICKs
-- `💬 ANSWERED` — the comment was a question; answered, nothing to change
+```html
+<!-- pr-autopilot:action=fixed sha=abc1234 -->   code was changed
+<!-- pr-autopilot:action=refuted -->             finding is wrong, with code evidence
+<!-- pr-autopilot:action=deferred -->            acknowledged, follow-up planned
+<!-- pr-autopilot:action=skipped -->             only allowed for NITPICKs
+<!-- pr-autopilot:action=answered -->            it was a question; answered, nothing to change
+```
 
-The orchestrator validates that no BLOCKER ever ends up `DEFERRED`/`SKIPPED` — including BLOCKERs inferred from a human's `CHANGES_REQUESTED` review. A standing human block is never merged past, however green CI is.
+The human reads a sentence; the pipeline reads the marker. That is what keeps the PR from looking like a bot filled in a form while the orchestrator still knows exactly what happened to each finding — and what lets the next iteration tell an already-handled thread from a new one.
 
-Comments that came from a human or another bot get the same treatment. They arrive without severity tags, so the Author infers one: a comment attached to a `CHANGES_REQUESTED` review, or naming a bug, a security hole, data loss or a broken contract, is a `BLOCKER`; anything explicitly marked "nit" or "optional" is a `NITPICK`; the rest defaults to `SUGGESTION`. It never downgrades a finding a human used to block the PR.
+The orchestrator validates that no BLOCKER ever ends up `deferred`/`skipped` — including BLOCKERs inferred from a human's `CHANGES_REQUESTED` review. A standing human block is never merged past, however green CI is.
+
+Comments that came from a human or another bot get the same treatment. They arrive without severity markers, so the Author infers one: a comment attached to a `CHANGES_REQUESTED` review, or naming a bug, a security hole, data loss or a broken contract, is a `BLOCKER`; anything explicitly marked "nit" or "optional" is a `NITPICK`; the rest defaults to `SUGGESTION`. It never downgrades a finding a human used to block the PR.
 
 ### Conflicts & CI (with `--resolve` / `--auto`)
 
@@ -261,7 +267,7 @@ The orchestrator never lets the agents talk directly. They communicate through *
 
 - `review-report.md` — produced by the Reviewer. Contains `verdict`, `blocker_count`, list of findings. Absent when `--resolve` runs without `--review`.
 - `pr-feedback.md` — produced by the Author before it writes any code. The inventory of every comment already on the PR: author, source, class, inferred severity, and whether it touches a business rule.
-- `response-summary.md` — produced by the Author. Contains per-finding action (`FIXED`, `REFUTED`, `DEFERRED`, `ANSWERED`), conflict status, per-check CI attribution, commit SHAs, and verification results.
+- `response-summary.md` — produced by the Author. Contains per-finding action (`FIXED`, `REFUTED`, `DEFERRED`, `ANSWERED`), conflict status, per-check CI attribution, commit SHAs, and verification results. These files are machine state and never get posted, which is why they keep the flat uppercase vocabulary the PR comments dropped.
 
 The orchestrator parses the front-matter and decides the next phase. This makes every step **inspectable, replayable, and resumable.**
 

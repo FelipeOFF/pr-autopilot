@@ -12,27 +12,124 @@ End-to-end PR pipeline: **create → (review → respond → re-review loop) →
 
 This skill is **rigid**. Follow the phases in order. Do not skip the verification gates between phases. Coordinate subagents via the `Task` tool (or `Agent` tool depending on harness). Persist intermediate artifacts to `.pr-autopilot/<pr-number>/` so iterations and re-runs are recoverable.
 
-### Writing style — humanize everything posted to the PR
+---
 
-Every piece of prose that lands on the PR — the PR body, each inline review
-comment, each inline reply, and the top-level review summary — **must be passed
-through the `humanizer` skill before posting**. The humanizer strips signs of
-AI-generated writing (rule-of-three, em-dash overuse, inflated symbolism, vague
-attributions, filler phrases, negative parallelisms) so the text reads like a
-human teammate wrote it.
+## 0. House style — humanize the prose, ponytail the code
 
-Rule of thumb for every phase that writes prose:
+pr-autopilot produces two kinds of output, and each one has a skill that owns it.
+This binds every agent in the pipeline: the orchestrator, the Reviewer, the Author,
+and anything they spawn.
 
-1. Draft the text (PR body / comment / reply).
-2. Invoke the `humanizer` skill on that draft (`Skill` tool, `skill: "humanizer"`),
-   passing the drafted text as input.
-3. Post the humanized output — never the raw draft.
+| Output | Owner skill | Applies to |
+|--------|-------------|------------|
+| Natural-language prose | `humanizer` | PR title and body, review summary, every inline comment, every inline reply, the CI triage comment |
+| Code | `ponytail` | Every fix the Author writes, every snippet the Reviewer suggests, conflict resolutions, CI repairs |
 
-Do **not** humanize: code snippets, severity tags (`[BLOCKER]`, `[SUGGESTION]`,
-`[NITPICK]`), status tags (`✅ FIXED`, `🛑 REFUTED`, `⏸ DEFERRED`, `🤷 SKIPPED`,
-`💬 ANSWERED`), machine markers (`<!-- pr-autopilot:ci-triage:... -->`),
-file paths, SHAs, or the front-matter of local artifacts. Humanize only the
-natural-language explanation between those structural markers.
+Invoke them with the `Skill` tool — `skill: "humanizer"`, `skill: "ponytail"`. Some
+harnesses namespace the second one as `ponytail:ponytail`; try the plain name first
+and fall back. **If a skill is not installed, the rules in §0.1 and §0.2 still bind.**
+They are the part of each skill this pipeline depends on, written out so an agent in
+a bare harness behaves the same way. Subagent prompt templates (§4.2, §5.6) carry
+their own copy for the same reason — a subagent is stateless and never reads this
+file.
+
+Local artifacts under `.pr-autopilot/` are the exception. They are machine state that
+nobody reads on the PR, so their front-matter and `Action:` fields keep the flat
+uppercase vocabulary (`FIXED`, `REFUTED`, `DEFERRED`, `SKIPPED`, `ANSWERED`). They
+are never posted anywhere.
+
+### 0.1 Prose is written by `humanizer`
+
+Draft the text, run it through the `humanizer` skill, post what comes back. Never
+post the raw draft.
+
+Without the skill, strip these yourself. They are what makes a comment read like a
+bot wrote it:
+
+- Status labels and emoji openers (`✅ FIXED`, `🛑 REFUTED`, `⏸ DEFERRED`) — see §0.3.
+- Rule of three. "Cleaner, safer, and easier to maintain" is three adjectives doing the work of none.
+- Em dash pile-ups. One per paragraph at most, and a comma usually does the job.
+- Negative parallelism: "not just X, but Y", "this isn't about X, it's about Y".
+- Promotional adjectives: robust, seamless, comprehensive, powerful, elegant. Say what the code does instead.
+- AI vocabulary: leverage, delve, utilize, crucial, pivotal, underscore, ensure, streamline, holistic.
+- Trailing `-ing` analysis: "…, ensuring maintainability and improving readability."
+- Vague attribution: "best practice suggests", "it is generally recommended".
+- Filler: "it's worth noting that", "in order to", "at this point in time".
+- Generic closers: "Overall, this improves the quality of the codebase."
+- Sycophancy as a formula: "Great catch!", "Excellent point!", "Thanks for the thoughtful review!" One short human acknowledgment is fine; a compliment sandwich is not.
+
+Write the way a teammate writes on a PR. Short sentences. Name the file, the line and
+the consequence. "is" and "are" are allowed. First person is allowed. No emoji unless
+the repository already uses them in its own comments.
+
+Do not humanize: code snippets, file paths, SHAs, command lines, machine markers
+(`<!-- pr-autopilot:... -->`), or the front-matter of local artifacts. Humanize the
+natural language between them.
+
+### 0.2 Code is written by `ponytail`
+
+Every line of code this pipeline writes or proposes goes through the ponytail ladder
+first. Stop at the first rung that holds:
+
+1. Does this need to exist at all? Speculative need means skip it, and say so in one line.
+2. Does the codebase already have it — a helper, a util, a type, a pattern a few files over? Reuse beats rewrite.
+3. Does the standard library do it?
+4. Does a native platform feature cover it?
+5. Does an already-installed dependency solve it? Never add a new one for what a few lines can do.
+6. Can it be one line?
+7. Only then: the minimum code that works.
+
+No abstraction with a single caller, no config for a value that never changes, no
+scaffolding for later. Deletion beats addition. Fix the root cause rather than the
+symptom the comment happens to name: one guard in the shared function is a smaller
+diff than a guard in every caller. Never propose a refactor larger than the finding
+that triggered it.
+
+Never be lazy about input validation at trust boundaries, error handling that
+prevents data loss, security, accessibility, or anything a reviewer explicitly asked
+for. And never lazy about understanding the problem — the ladder shortens the
+solution, not the reading.
+
+### 0.3 Say what happened, never stamp a status
+
+No comment posted to the PR opens with `✅ FIXED`, `🛑 REFUTED`, `⏸ DEFERRED`,
+`🤷 SKIPPED`, `💬 ANSWERED`, `[BLOCKER]`, or any other label of that shape. A form
+stamp is the loudest signal that a machine wrote the comment.
+
+The state those labels carried moves into an HTML comment on the last line of the
+body. GitHub and GitLab both render it invisible, and it is what the orchestrator and
+the next iteration parse:
+
+```
+<!-- pr-autopilot:action=fixed sha=abc1234 -->
+```
+
+**Author replies** — write the sentence, append the marker:
+
+| Old stamp | Write something like | Marker |
+|---|---|---|
+| `✅ FIXED in abc1234` | Good catch. Swapped the header check for `session.isAdmin` in abc1234. | `<!-- pr-autopilot:action=fixed sha=abc1234 -->` |
+| `🛑 REFUTED` | This one is already covered: `parseLimit` clamps to 100 on line 34, so the unbounded case never reaches here. | `<!-- pr-autopilot:action=refuted -->` |
+| `⏸ DEFERRED` | Agreed, but it is a wider change than this PR should carry. Leaving it out so this one stays reviewable. | `<!-- pr-autopilot:action=deferred -->` |
+| `🤷 SKIPPED` | Leaving this one alone. The rest of the file uses the same style, so changing it here makes it the odd one out. | `<!-- pr-autopilot:action=skipped -->` |
+| `💬 ANSWERED` | It runs once per request, in the auth middleware, before the handler sees the body. | `<!-- pr-autopilot:action=answered -->` |
+
+**Reviewer comments** — open with the words a reviewer says out loud, and put the
+parseable severity in the marker:
+
+| Severity | Opens with | Marker |
+|---|---|---|
+| BLOCKER | `Blocking:` | `<!-- pr-autopilot:severity=blocker -->` |
+| SUGGESTION | `Suggestion:` (or just the sentence) | `<!-- pr-autopilot:severity=suggestion -->` |
+| NITPICK | `nit:` | `<!-- pr-autopilot:severity=nitpick -->` |
+
+Marker rules:
+
+- Exactly one marker per posted comment, alone on the last line.
+- `action` is one of `fixed`, `refuted`, `deferred`, `skipped`, `answered`. `sha=` appears only on `fixed`.
+- Never humanize, translate, reword or reformat a marker. It is not prose.
+- The marker is what marks a thread handled on the next iteration. A reply without one gets re-answered forever.
+- Replies left by older versions of this skill open with a status tag instead. Read those as handled too (§5.1).
 
 ---
 
@@ -165,6 +262,11 @@ create the PR and stop.
 ```
 
 **Subagents are stateless.** Each invocation gets a self-contained prompt with: PR number, diff, base ref, and the path to the artifact it must write. Never delegate "understanding" — the orchestrator reads each artifact and decides next phase.
+
+Because they are stateless, every subagent prompt carries its own copy of the house
+style (§0): the Reviewer and the Author each invoke `humanizer` for prose and
+`ponytail` for code, and behave the same way when neither skill is installed in
+their harness.
 
 Phase 3 only runs under `--resolve`/`--auto`. When it runs, the Author's job is
 the whole PR: it triages every comment already on it (teammates, Copilot,
@@ -299,22 +401,25 @@ COMMIT_SHA=$(git rev-parse HEAD)
 
 # 2. POST the review with inline comments in a single call.
 #    Each comment carries: path, line, side ("RIGHT" for added/modified lines,
-#    "LEFT" for removed-only context), body, and severity tag in the body.
+#    "LEFT" for removed-only context), the humanized body, and the invisible
+#    severity marker on the body's last line.
 gh api -X POST "repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews" \
   -f commit_id="$COMMIT_SHA" \
   -f event="REQUEST_CHANGES" \   # or "COMMENT" if blocker_count == 0
   -f body="<top-level summary>" \
   -F "comments[][path]=src/foo.ts"      -F "comments[][line]=42"  -F "comments[][side]=RIGHT" \
-  -F "comments[][body]=[BLOCKER] <title>\n\n**Problem:** ...\n**Why it blocks:** ...\n**Suggested fix:**\n\`\`\`ts\n...\n\`\`\`" \
+  -F "comments[][body]=Blocking: <what breaks and why>\n\n\`\`\`ts\n<the lazy fix>\n\`\`\`\n\n<!-- pr-autopilot:severity=blocker -->" \
   -F "comments[][path]=src/bar.ts"      -F "comments[][line]=88"  -F "comments[][side]=RIGHT" \
-  -F "comments[][body]=[SUGGESTION] ..." \
+  -F "comments[][body]=Suggestion: ...\n\n<!-- pr-autopilot:severity=suggestion -->" \
   ...
 ```
 
 For a multi-line comment, use `start_line` + `start_side` + `line` + `side` instead of just `line`.
 
-The body of every inline comment **must** start with one of:
-`[BLOCKER]`, `[SUGGESTION]`, `[NITPICK]`. This tag is what the Author parses next.
+Every inline comment body is humanized prose that opens the way a reviewer speaks
+(`Blocking:` / `Suggestion:` / `nit:`) and **must** end with exactly one severity
+marker alone on its last line: `<!-- pr-autopilot:severity=blocker|suggestion|nitpick -->`.
+That marker, not the prose, is what the Author parses next (§0.3).
 
 If `gh api` rejects a `line` (e.g. the line is unchanged in the diff), the Reviewer must anchor to the **nearest changed line** in the same hunk and prefix the body with `(near line X)` so the location is clear. Never silently drop a finding.
 
@@ -325,7 +430,9 @@ If `gh api` rejects a `line` (e.g. the line is unchanged in the diff), the Revie
 # Get them from: glab api projects/:id/merge_requests/<iid>?include_diverged_commits_count=true
 
 glab api -X POST "projects/:id/merge_requests/<MR_IID>/discussions" \
-  -F body="[BLOCKER] ..." \
+  -F body="Blocking: ...
+
+<!-- pr-autopilot:severity=blocker -->" \
   -F position[position_type]=text \
   -F position[base_sha]=$BASE_SHA \
   -F position[head_sha]=$HEAD_SHA \
@@ -352,6 +459,15 @@ Head SHA: <HEAD_SHA>
 Iteration: <N> of <MAX>
 Repo root: <CWD>
 
+LOAD YOUR TWO SKILLS FIRST
+- `ponytail` (Skill tool, skill: "ponytail", falling back to "ponytail:ponytail")
+  before you read the diff. It is the lens of this review: the best code is the code
+  that was never written. Every fix you suggest is the laziest version that works.
+- `humanizer` (Skill tool, skill: "humanizer") before you post anything. It owns
+  every word of prose you write.
+If either is unavailable in your harness, the HOUSE STYLE block below is the part of
+them this pipeline depends on — apply it by hand.
+
 YOUR TASK
 1. Read the full diff: git diff <BASE>...<BRANCH>
 2. Read the changed files in their current state.
@@ -359,8 +475,12 @@ YOUR TASK
    - Correctness and edge cases
    - Security (injection, secret leakage, authz bypass, OWASP-class)
    - Performance (N+1, unbounded loops, blocking I/O on hot paths)
-   - Code quality (naming, dead code, premature abstraction, missing
-     error paths at trust boundaries)
+   - Code quality (naming, dead code, missing error paths at trust boundaries)
+   - Over-engineering, the ponytail lens: an abstraction with one caller, a new
+     dependency for what a few lines do, config for a value that never changes,
+     a helper reimplemented when the repo already has one two files over,
+     scaffolding built "for later", a wrapper that only forwards arguments.
+     Deleting code is a valid finding. So is "this whole file did not need to exist".
    - Consistency with surrounding codebase patterns
    - Test coverage proportional to risk
 
@@ -385,31 +505,61 @@ GitLab:
   `glab api projects/:id/merge_requests/<iid>/discussions` with a `position`
   block (base_sha, head_sha, start_sha, new_path, new_line).
 
-Each inline comment body MUST start with the severity tag, e.g.:
+COMMENT FORMAT — write like a reviewer, not like a form
+Never open a comment with `[BLOCKER]`, `[SUGGESTION]`, `[NITPICK]` or a status
+emoji. Open with the words a reviewer says out loud, say what breaks and where, and
+close the body with one invisible severity marker alone on the last line. The marker
+is what the pipeline parses; the prose is what the human reads.
 
-  [BLOCKER] Missing authz check on /admin/users
-  
-  **Problem:** the handler trusts the X-User header without verification.
-  **Why it blocks:** privilege escalation.
-  **Suggested fix:**
+  Blocking: the /admin/users handler trusts the X-User header without checking it,
+  so anyone can set that header and read the admin list.
+
+  The rest of the handlers already use the session guard:
+
   ```ts
   if (!req.session?.isAdmin) return res.status(403).end();
   ```
 
+  <!-- pr-autopilot:severity=blocker -->
+
+Openers and markers:
+  BLOCKER    → "Blocking: …"    <!-- pr-autopilot:severity=blocker -->
+  SUGGESTION → "Suggestion: …"  <!-- pr-autopilot:severity=suggestion -->
+  NITPICK    → "nit: …"         <!-- pr-autopilot:severity=nitpick -->
+Exactly one marker per comment. Never reword or reformat it.
+
 If the diff makes a line uncommentable (unchanged context outside the hunk),
-anchor to the nearest CHANGED line in the same hunk and prefix the body with
+anchor to the nearest CHANGED line in the same hunk and open the body with
 `(near line N)`. Never silently drop a finding.
 
-HUMANIZE BEFORE POSTING (mandatory)
-Before you POST anything to the PR, run every natural-language body through the
-`humanizer` skill (Skill tool, skill: "humanizer"):
-  - the top-level review summary, and
-  - the explanation prose inside each inline comment ("Problem", "Why it blocks",
-    and any narrative text).
-Humanize only the prose. Keep the leading severity tag ([BLOCKER]/[SUGGESTION]/
-[NITPICK]), code snippets, file paths, and line refs exactly as drafted. Post the
-humanized text — never the raw draft. This makes the review read like a human
-reviewer wrote it.
+──────────────────────────────────────────────────────────────────────────────
+HOUSE STYLE (mandatory) — humanize the prose, ponytail the code
+
+PROSE. Run every natural-language body through the `humanizer` skill (Skill tool,
+skill: "humanizer") before you POST it — the top-level review summary and the
+explanation inside each inline comment. Post the humanized text, never the raw
+draft. If the skill is unavailable, strip the tells yourself: status stamps and
+emoji openers, rule of three ("cleaner, safer, and easier to maintain"), em dash
+pile-ups, "not just X but Y", promotional adjectives (robust, seamless,
+comprehensive), AI vocabulary (leverage, delve, crucial, underscore, ensure),
+trailing "-ing" analysis ("…, ensuring maintainability"), vague attribution ("best
+practice suggests"), filler ("it's worth noting that", "in order to"), generic
+closers ("Overall this improves code quality"), and formulaic praise ("Great work
+on this PR!"). Short sentences. Name the file, the line and the consequence. No
+emoji unless the repo already uses them.
+Humanize the prose only. Code snippets, file paths, line refs and the trailing
+marker stay exactly as drafted.
+
+CODE. Every snippet you suggest goes through `ponytail` first, stopping at the first
+rung that holds: does this need to exist at all → does the repo already have it
+(helper, util, type, pattern) → does the stdlib do it → does a native platform
+feature cover it → does an already-installed dependency solve it → can it be one
+line → only then the minimum code that works. Never suggest a refactor larger than
+the bug. Never suggest a new dependency for what a few lines do. Deleting code is a
+valid suggestion.
+Do not apply the lazy lens to input validation at trust boundaries, error handling
+that prevents data loss, security, or accessibility — those get flagged when they
+are missing, never simplified away.
 
 OUTPUT (also write a local artifact)
 Write .pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md with this exact
@@ -437,6 +587,9 @@ review_id: <id returned by GitHub review POST, or "n/a" for GitLab>
 - url: <html_url from response>
 - Problem: ...
 - Suggested fix: ...
+
+(The uppercase severity is local machine state. It is what you write in this file,
+never what you post on the PR.)
 
 (repeat per finding, in posting order)
 
@@ -479,8 +632,9 @@ what the software decides, allows, blocks, or charges, it stops and consults the
 through the `groom-me` skill first.
 
 **Hard requirement:** every actionable comment gets an inline **reply** on that same
-comment, stating whether it was FIXED, REFUTED, DEFERRED, SKIPPED or ANSWERED. A
-standalone "I addressed everything" PR comment is **not** acceptable.
+comment. The reply says in plain language what happened to that finding, and carries
+the invisible action marker that records it for the pipeline (§0.3). A standalone
+"I addressed everything" PR comment is **not** acceptable.
 
 ### 5.1 Inventory & triage every comment on the PR
 
@@ -538,16 +692,18 @@ glab api "projects/:id/merge_requests/<IID>/discussions" --paginate
 | Class | What it looks like | Action |
 |-------|--------------------|--------|
 | `CRITIQUE` | Asks for a change: bug, risk, missing test, naming, "why not X?", a `CHANGES_REQUESTED` review body | Decide FIX / REFUTE / DEFER in §5.2 |
-| `QUESTION` | Wants an answer, not a code change ("does this handle the empty case?") | Reply `💬 ANSWERED`, no commit |
+| `QUESTION` | Wants an answer, not a code change ("does this handle the empty case?") | Answer it in plain prose, mark `action=answered`, no commit |
 | `NOISE` | "LGTM", praise, emoji, CI status chatter, duplicated bot output | Count it, reply to nothing |
-| `ALREADY_HANDLED` | Thread is `isResolved`/`resolved`, or a later reply already carries a pr-autopilot status tag | Skip — never re-answer |
+| `ALREADY_HANDLED` | Thread is `isResolved`/`resolved`, or a later reply already carries a pr-autopilot action marker | Skip — never re-answer |
 
 **The Author's own past replies are state, not input.** A comment written by the
-account pr-autopilot runs under, whose body starts with one of the status tags
-(`✅ FIXED` / `🛑 REFUTED` / `⏸ DEFERRED` / `🤷 SKIPPED` / `💬 ANSWERED`), marks its
-parent thread `ALREADY_HANDLED`. Reading those replies is how the Author knows what
-iteration N-1 already did; treating them as new findings is how it would spend
-forever answering itself.
+account pr-autopilot runs under, whose body carries an
+`<!-- pr-autopilot:action=... -->` marker, marks its parent thread
+`ALREADY_HANDLED`. Replies left by older versions of this skill open with a status
+tag instead (`✅ FIXED` / `🛑 REFUTED` / `⏸ DEFERRED` / `🤷 SKIPPED` / `💬 ANSWERED`)
+and count the same. Reading those replies is how the Author knows what iteration
+N-1 already did; treating them as new findings is how it would spend forever
+answering itself.
 
 **Deduplicate against `review-report.md`.** Under `--review --resolve`, the comments
 the Reviewer just posted show up in both sources. Match them by `comment_id` and keep
@@ -555,7 +711,7 @@ the `review-report.md` entry — it already carries the severity and the reasoni
 Never open two work items, and never post two replies, for one comment.
 
 **Step 3 — assign a severity.** External comments arrive without pr-autopilot's
-severity tags, so infer one:
+severity markers, so infer one:
 
 - `BLOCKER` — the comment belongs to a `CHANGES_REQUESTED` review, or names a bug, a security hole, data loss, or a broken contract.
 - `SUGGESTION` — a real improvement that is not blocking.
@@ -600,22 +756,29 @@ changes_requested_by: <login, login | none>
 Work the inventory in severity order (BLOCKER → SUGGESTION → NITPICK), plus every
 finding in `review-report.md` when `Trigger=review`.
 
-| Severity | Obligation |
-|----------|------------|
-| `BLOCKER` | Must be addressed: apply a fix, or REFUTE it with concrete code evidence. Refusing a BLOCKER without refutation is not allowed. |
-| `SUGGESTION` | Apply if low-risk and within PR scope, else DEFER with a reason. |
-| `NITPICK` | Apply if trivial, else SKIP. |
-| `QUESTION` | Answer it. No commit needed. |
+| Severity | Obligation | Marker |
+|----------|------------|--------|
+| `BLOCKER` | Must be addressed: apply a fix, or refute it with concrete code evidence. Refusing a BLOCKER without refutation is not allowed. | `action=fixed` / `action=refuted` |
+| `SUGGESTION` | Apply if low-risk and within PR scope, else defer with a reason. | `action=fixed` / `action=deferred` |
+| `NITPICK` | Apply if trivial, else leave it alone. | `action=fixed` / `action=skipped` |
+| `QUESTION` | Answer it. No commit needed. | `action=answered` |
 
 A finding marked `business_rule: yes` goes through `groom-me` (§5.5) **before** any
 code is written for it.
+
+Every code change written here goes through `ponytail` first (§0.2): reuse what the
+repo already has, smallest diff that fixes the root cause, no refactor larger than
+the finding that triggered it.
 
 #### GitHub — reply to a specific review comment
 
 ```bash
 # Reply on an existing pull-request review comment:
 gh api -X POST "repos/{owner}/{repo}/pulls/<PR_NUMBER>/comments/<comment_id>/replies" \
-  -f body="✅ FIXED in <commit_sha> — switched to session.isAdmin guard."
+  -f body="Good catch. Switched that path to the session.isAdmin guard the other
+handlers use, in <commit_sha>.
+
+<!-- pr-autopilot:action=fixed sha=<commit_sha> -->"
 ```
 
 A top-level comment has no reply endpoint — answer it with a new issue comment that
@@ -625,7 +788,9 @@ quotes the line it responds to:
 gh api -X POST "repos/{owner}/{repo}/issues/<PR_NUMBER>/comments" \
   -f body="> <quoted original>
 
-✅ FIXED in <sha> — ..."
+<one or two sentences on what you did and why>
+
+<!-- pr-autopilot:action=fixed sha=<sha> -->"
 ```
 
 #### GitLab — reply to a discussion
@@ -633,21 +798,25 @@ gh api -X POST "repos/{owner}/{repo}/issues/<PR_NUMBER>/comments" \
 ```bash
 glab api -X POST \
   "projects/:id/merge_requests/<MR_IID>/discussions/<discussion_id>/notes" \
-  -F body="✅ FIXED in <commit_sha>"
+  -F body="Switched that path to the session.isAdmin guard, in <commit_sha>.
+
+<!-- pr-autopilot:action=fixed sha=<commit_sha> -->"
 ```
 
-The reply body MUST start with one of these status tags:
+The reply body is plain prose, humanized before posting (§0.1), and MUST end with
+exactly one action marker alone on the last line (§0.3):
 
-| Tag | Meaning |
-|-----|---------|
-| `✅ FIXED in <sha>` | Code was changed to address the finding |
-| `🛑 REFUTED` | The finding is factually wrong; reply explains why with code evidence |
-| `⏸ DEFERRED` | Acknowledged, not fixed in this PR; explains the follow-up plan |
-| `🤷 SKIPPED` | Allowed only for NITPICKs the author chose to ignore |
-| `💬 ANSWERED` | The comment was a question; the reply answers it, no code changed |
+| Marker | Meaning |
+|--------|---------|
+| `<!-- pr-autopilot:action=fixed sha=<sha> -->` | Code was changed to address the finding |
+| `<!-- pr-autopilot:action=refuted -->` | The finding is factually wrong; the reply explains why with code evidence |
+| `<!-- pr-autopilot:action=deferred -->` | Acknowledged, not fixed in this PR; the reply explains the follow-up |
+| `<!-- pr-autopilot:action=skipped -->` | Allowed only for NITPICKs the author chose to leave alone |
+| `<!-- pr-autopilot:action=answered -->` | The comment was a question; the reply answers it, no code changed |
 
-The orchestrator parses these tags to validate that no BLOCKER got `SKIPPED`, and
-the next iteration parses them to know which threads are already handled (§5.1).
+The orchestrator parses these markers to validate that no BLOCKER ended up
+`skipped`, and the next iteration parses them to know which threads are already
+handled (§5.1). The prose never carries the state — the marker does.
 
 ### 5.3 Resolve merge conflicts
 
@@ -819,8 +988,9 @@ making the change:
 
 A reviewer *asking* for a business-rule change does not authorize it. "This should
 also block users over the limit" is a request to change what the software blocks —
-the reviewer's comment is the input to `groom-me`, not a substitute for it. Reply
-`⏸ DEFERRED` on that comment if the user cannot be reached.
+the reviewer's comment is the input to `groom-me`, not a substitute for it. If the
+user cannot be reached, reply on that comment saying the change needs a product
+decision you could not get in this run, and mark it `action=deferred` (§0.3).
 
 In a non-interactive run where the user cannot be reached, a business-logic
 comment/conflict/fix is **not** auto-resolved: record it as `escalated` and halt with
@@ -868,6 +1038,52 @@ the conflicting file or rule, scoped to the project's memory. A recorded decisio
 outranks a guess.
 
 ──────────────────────────────────────────────────────────────────────────────
+HOUSE STYLE — humanize the prose, ponytail the code (binds everything below)
+
+PROSE. Every reply, comment or PR text you post goes through the `humanizer` skill
+(Skill tool, skill: "humanizer") before posting. Never post the raw draft. If that
+skill is unavailable, strip the tells yourself: status stamps and emoji openers,
+rule of three ("cleaner, safer, and easier to maintain"), em dash pile-ups, "not
+just X but Y", promotional adjectives (robust, seamless, comprehensive), AI
+vocabulary (leverage, delve, crucial, underscore, ensure, streamline), trailing
+"-ing" analysis ("…, ensuring maintainability"), vague attribution ("best practice
+suggests"), filler ("it's worth noting that", "in order to"), generic closers
+("Overall this improves code quality"), and formulaic praise ("Great catch!" every
+single time). Write like a teammate: short sentences, name the file and the
+consequence, no emoji unless the repo already uses them in its own comments.
+
+NEVER STAMP A STATUS. No reply opens with ✅ FIXED / 🛑 REFUTED / ⏸ DEFERRED /
+🤷 SKIPPED / 💬 ANSWERED or any label of that shape — that is the loudest signal a
+machine wrote it. Say what happened in a sentence, then close the body with exactly
+one invisible marker alone on the last line. The marker, not the prose, is the
+machine state:
+    <!-- pr-autopilot:action=fixed sha=abc1234 -->
+    <!-- pr-autopilot:action=refuted -->
+    <!-- pr-autopilot:action=deferred -->
+    <!-- pr-autopilot:action=skipped -->     (NITPICK only)
+    <!-- pr-autopilot:action=answered -->    (QUESTION only)
+Never humanize, translate or reformat a marker. A reply without one gets re-answered
+next round. Local artifacts under .pr-autopilot/ are the exception: they are machine
+state, keep their uppercase vocabulary, and are never posted.
+
+CODE. Every fix, conflict resolution and CI repair goes through the `ponytail` skill
+(Skill tool, skill: "ponytail", falling back to "ponytail:ponytail") first. If it is
+unavailable, apply the ladder yourself and stop at the first rung that holds:
+does this need to exist at all → does the repo already have it (helper, util, type,
+pattern a few files over) → does the stdlib do it → does a native platform feature
+cover it → does an already-installed dependency solve it → can it be one line →
+only then the minimum code that works.
+No abstraction with a single caller, no new dependency for what a few lines do, no
+scaffolding for later. Deletion beats addition. Fix the root cause, not the symptom
+the comment names: one guard in the shared function beats a guard in every caller —
+so grep the other callers before you patch the one the comment points at. Never
+refactor beyond what the finding asked for.
+Never be lazy about input validation at trust boundaries, error handling that
+prevents data loss, security, accessibility, or anything a reviewer explicitly asked
+for. And never lazy about understanding the problem: read the whole flow first, then
+pick the smallest fix.
+
+──────────────────────────────────────────────────────────────────────────────
 (A) INVENTORY + TRIAGE EVERY COMMENT ON THE PR   (always, every round)
 Pull ALL of it — human and bot, inline and top-level:
      gh api repos/<SLUG>/pulls/<PR_NUMBER>/comments  --paginate
@@ -878,11 +1094,13 @@ Pull ALL of it — human and bot, inline and top-level:
 
 Classify each: CRITIQUE (asks for a change) | QUESTION (wants an answer) |
 NOISE (LGTM/praise/bot chatter) | ALREADY_HANDLED (thread resolved, or a reply
-already carries a pr-autopilot status tag).
+already carries a pr-autopilot action marker).
 
-YOUR OWN PAST REPLIES ARE STATE, NOT INPUT. A comment from your own account starting
-with ✅ FIXED / 🛑 REFUTED / ⏸ DEFERRED / 🤷 SKIPPED / 💬 ANSWERED marks that thread
-ALREADY_HANDLED. Read them to know what the last round did; never answer them.
+YOUR OWN PAST REPLIES ARE STATE, NOT INPUT. A comment from your own account carrying
+a `<!-- pr-autopilot:action=... -->` marker marks that thread ALREADY_HANDLED. Read
+them to know what the last round did; never answer them. Replies from older versions
+of this pipeline open with a status tag instead (✅ FIXED / 🛑 REFUTED / ⏸ DEFERRED /
+🤷 SKIPPED / 💬 ANSWERED) — treat those as handled too.
 
 DEDUPE against review-report.md by comment_id when Trigger=review — a comment in both
 sources is ONE work item and ONE reply. Keep the review-report entry.
@@ -907,39 +1125,48 @@ Trigger=review (it carries each finding's comment_id).
                is factually wrong, REFUTE it with concrete evidence (cite the code
                that already handles the case). Refusing a BLOCKER without
                refutation is not allowed.
-  SUGGESTION — apply if low-risk and within PR scope. Otherwise mark DEFERRED with
-               a clear reason.
-  NITPICK    — apply only if trivial; otherwise SKIPPED is acceptable.
+  SUGGESTION — apply if low-risk and within PR scope. Otherwise reply with the
+               reason and mark action=deferred.
+  NITPICK    — apply only if trivial; otherwise action=skipped is acceptable.
   QUESTION   — answer it; no commit needed.
   business_rule: yes — GOLDEN RULE (groom-me) BEFORE writing any code for it.
 
 Per finding, in order:
-1. Make the code change (file-scoped; do not introduce unrelated edits).
+1. Make the code change through the ponytail ladder above (file-scoped, smallest
+   diff that fixes the root cause; do not introduce unrelated edits).
 2. Stage and commit using Conventional Commits + Jira when applicable:
      fix(JIRA-XXX): Address review iter-<N> — <brief>
    Capture the resulting commit SHA.
-3. Post an inline REPLY on the corresponding comment:
+3. Post an inline REPLY on the corresponding comment. Plain prose, humanized, with
+   the action marker alone on the last line — no status stamp, no emoji opener:
      GitHub (inline comment):
        gh api -X POST repos/<SLUG>/pulls/<PR_NUMBER>/comments/<comment_id>/replies \
-         -f body="<status_tag> — <one-line explanation>\n\n<optional: snippet of new code>"
+         -f body="<one or two sentences on what you did and why>\n\n<optional: snippet of new code>\n\n<!-- pr-autopilot:action=fixed sha=<sha> -->"
      GitHub (top-level comment — no reply endpoint; quote the original):
        gh api -X POST repos/<SLUG>/issues/<PR_NUMBER>/comments \
-         -f body="> <quoted original>\n\n<status_tag> — ..."
+         -f body="> <quoted original>\n\n<what you did>\n\n<!-- pr-autopilot:action=fixed sha=<sha> -->"
      GitLab:
        glab api -X POST projects/:id/merge_requests/<iid>/discussions/<discussion_id>/notes \
-         -F body="<status_tag> — ..."
-   The reply body MUST start with exactly one of:
-     ✅ FIXED in <sha>   🛑 REFUTED   ⏸ DEFERRED   🤷 SKIPPED (NITPICK only)
-     💬 ANSWERED (QUESTION only)
+         -F body="<what you did>\n\n<!-- pr-autopilot:action=... -->"
 
-   HUMANIZE BEFORE POSTING (mandatory): run each reply's natural-language
-   explanation through the `humanizer` skill (Skill tool, skill: "humanizer").
-   Keep the leading status tag, the SHA, and any code snippet exactly as drafted —
-   humanize only the prose between them. Post the humanized reply, never the raw
-   draft.
+   The \n above must reach the API as REAL newlines — `gh api -f` / `glab api -F`
+   do not interpret backslash escapes, and a marker that lands mid-line shows up as
+   visible text instead of an HTML comment. Pass a literal multi-line string, or
+   read the body from a file: `-F body=@reply.md`.
 
-   Resolve the conversation if the platform supports it and the action is FIXED or
-   REFUTED:
+   Draft the sentence, run it through `humanizer`, then append the marker verbatim
+   (never humanize the marker, the SHA or a code snippet). Examples of the sentence:
+     fixed    → "Good catch. Swapped the header check for session.isAdmin in abc1234."
+     refuted  → "This is already covered: parseLimit clamps to 100 on line 34, so
+                 the unbounded case never reaches here."
+     deferred → "Agreed, but it is a wider change than this PR should carry. Leaving
+                 it out so this one stays reviewable."
+     skipped  → "Leaving this one alone. The rest of the file uses the same style."
+     answered → "It runs once per request, in the auth middleware, before the
+                 handler sees the body."
+
+   Resolve the conversation if the platform supports it and the action is `fixed` or
+   `refuted`:
      gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"<id>"}){thread{isResolved}}}'
      glab api -X PUT projects/:id/merge_requests/<iid>/discussions/<discussion_id>?resolved=true
 
@@ -1019,7 +1246,8 @@ Makefile / etc. Do NOT invent commands.
 - type-check
 - tests
 If any of them regress vs. the pre-iteration baseline, do NOT push and do NOT post
-replies that claim FIXED. Write a failure record into the response summary and stop.
+replies that claim a fix (`action=fixed`). Write a failure record into the response
+summary and stop.
 
 OUTPUT
 Write .pr-autopilot/<PR_NUMBER>/iter-<N>/response-summary.md:
@@ -1089,7 +1317,7 @@ verification: pass | fail | partial
 - Read `response-summary.md` (and `pr-feedback.md` when you need the raw inventory).
 - If `verification: fail` → halt, surface logs to user, **do not** loop, **do not** merge.
 - If `conflict: escalated` or `ci: escalated` → halt and surface exactly what needs a human decision (the Author already consulted `groom-me` where it could). When `ci_triage_comment: not-asked`, print the drafted comment body so the user can post it themselves in one paste. Do **not** merge.
-- Validate: every BLOCKER must have `Action: FIXED` or `REFUTED`. Any BLOCKER with `DEFERRED`/`SKIPPED` → halt and escalate (this is a guardrail violation). This applies to BLOCKERs inferred from external `CHANGES_REQUESTED` reviews exactly as it does to pr-autopilot's own.
+- Validate: every BLOCKER must have `Action: FIXED` or `REFUTED` in `response-summary.md` — the same value its posted reply carries as `action=` in the trailing marker (§0.3). Any BLOCKER with `DEFERRED`/`SKIPPED` → halt and escalate (this is a guardrail violation). This applies to BLOCKERs inferred from external `CHANGES_REQUESTED` reviews exactly as it does to pr-autopilot's own.
 - If a human left `CHANGES_REQUESTED` and has not re-reviewed, the PR is not mergeable regardless of CI — never merge past a standing human block.
 - If everything green → increment iteration counter. Under `--review` (or `--auto`), return to **Phase 2** with iteration N+1; under a `--resolve`-only run, go to **Phase 5**.
 - After `MAX_ITERATIONS` cycles still not APPROVED (or CI still red) → escalate: print summary of remaining BLOCKERs / red checks and ask user how to proceed (extend iterations / abort). Never force a merge past a guardrail.
@@ -1186,8 +1414,8 @@ Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `sta
 | CI fails externally, non-interactive/`--auto` | Do **not** comment — no prompt means no consent. Record `ci: escalated`, `ci_triage_comment: not-asked`, print the drafted body for the human to post |
 | CI fails, resolve off | Surface failing job logs, stop |
 | PR has comments from humans or other bots | Author triages all of them (§5.1), inline and top-level, with the same severity rules as its own findings |
-| Author's own earlier replies on the PR | Read as state (what round N-1 did), never re-answered — a reply carrying a status tag marks its thread `ALREADY_HANDLED` |
-| A reviewer asks for a business-rule change | The request is input to `groom-me`, not authorization. Confirm with the user first; `⏸ DEFERRED` if unreachable |
+| Author's own earlier replies on the PR | Read as state (what round N-1 did), never re-answered — a reply carrying an `<!-- pr-autopilot:action=... -->` marker marks its thread `ALREADY_HANDLED`; replies from older versions carry a leading status tag instead and count the same |
+| A reviewer asks for a business-rule change | The request is input to `groom-me`, not authorization. Confirm with the user first; reply saying it needs a product decision and mark `action=deferred` if unreachable |
 | Human left `CHANGES_REQUESTED` and hasn't re-reviewed | Never merge, no matter how green CI is |
 | Merge conflict, `--resolve`/`--auto` on | Author resolves on the feature branch (merge base in, §5.3); business-rule conflicts go through `groom-me` first |
 | Merge conflict, resolve off | Stop, ask user — do not auto-resolve |
