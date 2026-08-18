@@ -48,7 +48,9 @@ Os estágios ②–⑥ são opt-in. Sem nenhuma flag, a execução termina depoi
 - **Título e descrição automáticos** baseados em commits e diff, seguindo Conventional Commits + Jira.
 - **Loop de review multi-agente** com achados estruturados: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Author com poder de veto** — pode refutar um BLOCKER incorreto com evidência ao invés de aplicar cegamente.
-- **Lê todo comentário do PR, não só os dele** — com `--resolve`, o Author puxa comentários inline, comentários de topo e vereditos de review de humanos *e* de bots (Copilot, CodeRabbit, Sonar), classifica cada um (crítica / pergunta / ruído / já tratado), infere a severidade e responde inline em cada um com `✅ FIXED` / `🛑 REFUTED` / `⏸ DEFERRED` / `🤷 SKIPPED` / `💬 ANSWERED`. As respostas que ele mesmo deixou são lidas como estado, então ele nunca entra em loop respondendo a si mesmo.
+- **Escreve como gente, codifica como sênior preguiçoso** — cada palavra postada no PR passa pela [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) e cada linha de código pela [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). Sem carimbo `✅ FIXED`, sem colchete `[BLOCKER]`, sem emoji de abertura: o comentário parece escrito por um colega, e o estado de máquina viaja num marcador HTML invisível. As duas skills também estão reescritas dentro da própria skill, então um harness sem elas se comporta igual.
+- **Revisa over-engineering, não só bug** — o Reviewer carrega a lente ponytail: abstração com um único caller, dependência adicionada por três linhas, helper reimplementado quando o repo já tem um. "Apaga isso" é um achado válido.
+- **Lê todo comentário do PR, não só os dele** — com `--resolve`, o Author puxa comentários inline, comentários de topo e vereditos de review de humanos *e* de bots (Copilot, CodeRabbit, Sonar), classifica cada um (crítica / pergunta / ruído / já tratado), infere a severidade e responde inline em cada um, em linguagem de gente, com o marcador invisível carregando o estado. As respostas que ele mesmo deixou são lidas como estado, então ele nunca entra em loop respondendo a si mesmo.
 - **Resolve o PR inteiro** — com `--resolve`/`--auto`, o Author também resolve **conflitos de merge** (fazendo merge da base no feature branch, sem force-push) e **corrige o CI falhando** (lê os logs, corrige o código, roda a verificação de novo, dá push).
 - **Atribui a falha de CI antes de encostar nela** — checa se o arquivo que quebrou está no seu diff, se a mesma job falha na branch base e em outros PRs abertos, e se o log mostra secret faltando ou timeout de rede. O que quebrou por sua causa é corrigido. O que quebrou por causa alheia nunca é maquiado com teste pulado ou pin aleatório.
 - **Só diz "o problema não é do meu PR" com a sua permissão** — e uma vez só. Antes de postar esse comentário ele pergunta, mostrando o texto exato; procura o próprio marcador `<!-- pr-autopilot:ci-triage:<check> -->` para que um re-run nunca poste duas vezes; e em `--auto` fica calado e te entrega o texto pronto.
@@ -225,23 +227,27 @@ Toda flag booleana tem default `false` — passe-a (pura, ou `=true`) para ligar
 
 ### Review inline e respostas inline
 
-O Reviewer **nunca** posta um comentário único agregado no PR. Cada achado vai como comentário inline no arquivo e linha exatos, com tag de severidade:
+O Reviewer **nunca** posta um comentário único agregado no PR. Cada achado vai como comentário inline no arquivo e linha exatos. Ele abre com as palavras que um revisor fala em voz alta — `Blocking:`, `Suggestion:`, `nit:` — e fecha com um marcador invisível que carrega a severidade para o pipeline:
 
-- `[BLOCKER]` — precisa ser corrigido antes do merge
-- `[SUGGESTION]` — provavelmente deveria ser corrigido
-- `[NITPICK]` — opcional
+```html
+<!-- pr-autopilot:severity=blocker -->
+```
 
-O Author responde em cada comentário inline com uma de:
+O Author responde em cada comentário inline em linguagem normal, e fecha a resposta com o marcador de ação:
 
-- `✅ FIXED in <sha>` — o código foi alterado
-- `🛑 REFUTED` — o achado está errado, com evidência no código
-- `⏸ DEFERRED` — reconhecido, follow-up planejado
-- `🤷 SKIPPED` — só permitido em NITPICKs
-- `💬 ANSWERED` — o comentário era uma pergunta; respondida, nada a mudar
+```html
+<!-- pr-autopilot:action=fixed sha=abc1234 -->   o código foi alterado
+<!-- pr-autopilot:action=refuted -->             o achado está errado, com evidência no código
+<!-- pr-autopilot:action=deferred -->            reconhecido, follow-up planejado
+<!-- pr-autopilot:action=skipped -->             só permitido em NITPICKs
+<!-- pr-autopilot:action=answered -->            era uma pergunta; respondida, nada a mudar
+```
 
-O orquestrador valida que nenhum BLOCKER fica `DEFERRED`/`SKIPPED` — inclusive os BLOCKERs inferidos de um `CHANGES_REQUESTED` humano. Um bloqueio humano em aberto nunca é ultrapassado, por mais verde que o CI esteja.
+O humano lê uma frase; o pipeline lê o marcador. É isso que evita que o PR pareça um formulário preenchido por robô sem o orquestrador perder de vista o que aconteceu com cada achado — e é o que deixa a próxima iteração distinguir uma thread já tratada de uma nova.
 
-Comentários vindos de um humano ou de outro bot recebem o mesmo tratamento. Eles chegam sem tag de severidade, então o Author infere uma: comentário ligado a um review `CHANGES_REQUESTED`, ou que aponta bug, falha de segurança, perda de dados ou contrato quebrado, é `BLOCKER`; o que estiver marcado como "nit" ou "opcional" é `NITPICK`; o resto cai em `SUGGESTION`. Ele nunca rebaixa um achado que um humano usou para bloquear o PR.
+O orquestrador valida que nenhum BLOCKER fica `deferred`/`skipped` — inclusive os BLOCKERs inferidos de um `CHANGES_REQUESTED` humano. Um bloqueio humano em aberto nunca é ultrapassado, por mais verde que o CI esteja.
+
+Comentários vindos de um humano ou de outro bot recebem o mesmo tratamento. Eles chegam sem marcador de severidade, então o Author infere uma: comentário ligado a um review `CHANGES_REQUESTED`, ou que aponta bug, falha de segurança, perda de dados ou contrato quebrado, é `BLOCKER`; o que estiver marcado como "nit" ou "opcional" é `NITPICK`; o resto cai em `SUGGESTION`. Ele nunca rebaixa um achado que um humano usou para bloquear o PR.
 
 ### Conflitos & CI (com `--resolve` / `--auto`)
 
@@ -261,7 +267,7 @@ O orquestrador nunca deixa os agentes conversarem diretamente. Eles se comunicam
 
 - `review-report.md` — produzido pelo Reviewer. Contém `verdict`, `blocker_count`, lista de achados. Ausente quando `--resolve` roda sem `--review`.
 - `pr-feedback.md` — produzido pelo Author antes de escrever qualquer código. O inventário de todo comentário que já existe no PR: autor, origem, classe, severidade inferida e se mexe em regra de negócio.
-- `response-summary.md` — produzido pelo Author. Contém ação por achado (`FIXED`, `REFUTED`, `DEFERRED`, `ANSWERED`), status de conflito, atribuição de CI por check, SHA dos commits e resultado da verificação.
+- `response-summary.md` — produzido pelo Author. Contém ação por achado (`FIXED`, `REFUTED`, `DEFERRED`, `ANSWERED`), status de conflito, atribuição de CI por check, SHA dos commits e resultado da verificação. Esses arquivos são estado de máquina e nunca vão para o PR, por isso mantêm o vocabulário em caixa alta que os comentários abandonaram.
 
 O orquestrador faz parsing do front-matter e decide a próxima fase. Cada passo é **inspecionável, repetível e resumível.**
 
