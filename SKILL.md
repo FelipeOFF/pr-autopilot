@@ -547,7 +547,7 @@ Blocking: this test mocks `calculateTotal` and asserts the mock's return value, 
 <!-- pr-autopilot:severity=blocker -->
 ```
 
-These nuke-track findings are added to the same `findings` array the code-review track produces, before the orchestrator posts the consolidated review in §4.5.
+These nuke-track findings are added to the same `findings` array the code-review track produces, before the orchestrator posts the consolidated review in §4.6.
 
 ### 4.4 How to post inline comments (both tracks)
 
