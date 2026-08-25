@@ -31,7 +31,7 @@ Invoke them with the `Skill` tool — `skill: "humanizer"`, `skill: "ponytail"`.
 harnesses namespace the second one as `ponytail:ponytail`; try the plain name first
 and fall back. **If a skill is not installed, the rules in §0.1 and §0.2 still bind.**
 They are the part of each skill this pipeline depends on, written out so an agent in
-a bare harness behaves the same way. Subagent prompt templates (§4.2, §5.6) carry
+a bare harness behaves the same way. Subagent prompt templates (§4.5, §5.6) carry
 their own copy for the same reason — a subagent is stateless and never reads this
 file.
 
@@ -411,7 +411,7 @@ Scoping: the test nuke track evaluates tests **in the PR diff** and tests they c
 
 ### 4.1 Code review track — the existing Reviewer
 
-Spawn one `Task` subagent with `subagent_type: "general-purpose"` (or `code-reviewer` if available). This is the existing Phase 2 behavior, unchanged. The prompt template in §4.3 applies here.
+Spawn one `Task` subagent with `subagent_type: "general-purpose"` (or `code-reviewer` if available). This is the existing Phase 2 behavior, unchanged. The prompt template in §4.5 applies here.
 
 The Reviewer reads the full diff, evaluates correctness/security/performance/code-quality/over-engineering, classifies each finding as BLOCKER/SUGGESTION/NITPICK, and writes `.pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md` with the list of findings. **Do not post the review to the PR yet** — the orchestrator will merge findings from both tracks before posting.
 
@@ -537,7 +537,7 @@ The orchestrator reads `nuke-consolidated.md` and converts each removal candidat
 - **Candidate for removal, weaker justification (unjustified cost / unclear duplication)** → `SUGGESTION` severity.
 - **Missing justification** → `SUGGESTION` (not BLOCKER).
 
-The comment body follows the same format as code-review findings (§4.3): humanized prose, opens with `Blocking:` or `Suggestion:`, closes with `<!-- pr-autopilot:severity=blocker|suggestion -->`.
+The comment body follows the same format as code-review findings (§4.5): humanized prose, opens with `Blocking:` or `Suggestion:`, closes with `<!-- pr-autopilot:severity=blocker|suggestion -->`.
 
 Example:
 
