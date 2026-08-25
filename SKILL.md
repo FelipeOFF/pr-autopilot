@@ -414,73 +414,26 @@ Scoping: the test nuke track evaluates tests **in the PR diff** and tests they c
 
 Spawn one `Task` subagent with `subagent_type: "general-purpose"` (or `code-reviewer` if available). This replaces the old "correctness-only" reviewer with a deep maintainability audit. The prompt template in §4.5 applies here.
 
-**Source**: [thermo-nuclear-code-quality-review](https://github.com/cursor/plugins/tree/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review) skill (cursor/plugins). Upstream skill has `disable-model-invocation: true` (explicit ask required); inside pr-autopilot, `--review` / `--auto` IS that explicit ask. Do not run this on `--resolve`-only.
+**Composition**: The Reviewer MUST load the `thermo-nuclear-code-quality-review` skill via the Skill tool before auditing the diff (§4.5). That loaded skill IS the review standard: core prompt, rules 0–7, questions, flag list, remedies, tone, output priority, approval bar.
 
-**Core mission**: Perform a deep code quality audit of the PR diff. Rethink how to structure/implement the changes to meaningfully improve code quality without impacting behavior. Be ambitious about code structure. Look for "code judo" moves: restructurings that preserve behavior while making the implementation dramatically simpler, smaller, more direct, and more elegant. Measure twice, cut once.
+**Install**: `npx skills add https://github.com/cursor/plugins --skill thermo-nuclear-code-quality-review` then `/reload-plugins` in Claude Code. [Catalog](https://www.skills.sh/cursor/plugins/thermo-nuclear-code-quality-review) | [Source](https://github.com/cursor/plugins/tree/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review)
 
-**Review rules (0–7, from upstream skill)**:
+Upstream skill has `disable-model-invocation: true` (explicit ask required); inside pr-autopilot, `--review` / `--auto` IS that explicit ask. Do not run this on `--resolve`-only.
 
-0. **Be ambitious about structural simplification.**
-   - Do not stop at "this could be a bit cleaner." Look for opportunities to reframe the change so that whole branches, helpers, modes, conditionals, or layers disappear entirely.
-   - Assume there is often a "code judo" move available: a re-organization that uses the existing architecture more effectively and makes the change dramatically simpler.
-   - If you see a path to delete complexity rather than rearrange it, push hard for that path.
-
-1. **Do not let a PR push a file from under 1k lines to over 1k lines without a very strong reason.**
-   - Treat this as a strong code-quality smell by default.
-   - Prefer extracting helpers, subcomponents, modules, or local abstractions instead of letting a file sprawl past 1000 lines.
-   - Only waive this if there is a compelling structural reason and the resulting file is still clearly organized.
-
-2. **Do not allow random spaghetti growth in existing code.**
-   - Be highly suspicious of new ad-hoc conditionals, scattered special cases, or one-off branches inserted into unrelated flows.
-   - Prefer pushing the logic into a dedicated abstraction, helper, state machine, policy object, or separate module instead of tangling an existing path.
-   - Call out changes that make the surrounding code harder to reason about, even if they technically work.
-
-3. **Bias toward cleaning the design, not just accepting working code.**
-   - If behavior can stay the same while the structure becomes meaningfully cleaner, push for the cleaner version.
-   - Do not rubber-stamp "it works" implementations that leave the codebase messier.
-
-4. **Prefer direct, boring, maintainable code over hacky or magical code.**
-   - Treat brittle, ad-hoc, or "magic" behavior as a code-quality problem.
-   - Be skeptical of generic mechanisms that hide simple data-shape assumptions.
-   - Flag thin abstractions, identity wrappers, or pass-through helpers that add indirection without buying clarity.
-
-5. **Push hard on type and boundary cleanliness when they affect maintainability.**
-   - Question unnecessary optionality, `unknown`, `any`, or cast-heavy code when a clearer type boundary could exist.
-   - Prefer explicit typed models or shared contracts over loosely-shaped ad-hoc objects.
-
-6. **Keep logic in the canonical layer and reuse existing helpers.**
-   - Call out feature logic leaking into shared paths or implementation details leaking through APIs.
-   - Prefer existing canonical utilities/helpers over bespoke one-offs.
-   - Push code toward the right package, service, or module instead of normalizing architectural drift.
-
-7. **Treat unnecessary sequential orchestration and non-atomic updates as design smells when the cleaner structure is obvious.**
-   - If independent work is serialized for no good reason, ask whether the flow should run in parallel instead.
-   - If related updates can leave state half-applied, push for a more atomic structure.
-
-**Presumptive BLOCKERS** (map to pr-autopilot `BLOCKER` severity):
-- The PR preserves a lot of incidental complexity when there is a plausible code-judo move that would delete it
-- The PR pushes a file from below 1000 lines to above 1000 lines
-- The PR adds ad-hoc branching that makes an existing flow more tangled
-- The PR scatters feature checks across shared code
-- The PR adds an unnecessary abstraction, wrapper, or cast-heavy contract that makes the design more indirect
-- The PR duplicates an existing helper or puts logic in the wrong layer when there is a clear canonical home
-
-**Approval bar**: Do NOT approve merely because behavior seems correct. The bar is: no clear structural regression, no obvious missed opportunity to make the implementation dramatically simpler, no unjustified file-size explosion, no spaghetti-growth from special-case branching, no obviously hacky abstraction, no unnecessary wrapper/cast/optionality churn, no clear architecture-boundary leak.
-
-**Tone**: Direct, serious, and demanding about quality. Not rude, but do not soften major maintainability issues into mild suggestions. humanizer still owns posted prose (strip AI tells, keep the directness).
-
-**Priority** (report in this order):
-1. Structural code-quality regressions
-2. Missed opportunities for dramatic simplification / code-judo restructuring
-3. Spaghetti / branching complexity increases
-4. Boundary / abstraction / type-contract problems
-5. File-size and decomposition concerns
-6. Modularity and abstraction issues
-7. Legibility and maintainability concerns
-
-**Do NOT flood nits.** Prefer a smaller number of high-conviction comments over a long list of cosmetic notes.
-
-**Extra lens**: Keep ponytail as an additional anti-over-engineering check (does this need to exist at all? does the repo already have it? stdlib? native platform? installed dependency? one line?). Thermo-Nuclear is the approval bar; ponytail is a sanity check.
+**Fallback rules** (if the Skill tool cannot load the upstream skill):
+- Perform a deep code quality audit of the PR diff
+- Be ambitious about structural simplification; look for "code judo" moves that delete complexity
+- Do not let a PR push a file <1k → >1k lines without very strong reason
+- Do not allow random spaghetti growth (ad-hoc conditionals in unrelated flows)
+- Bias toward cleaning the design, not just accepting working code
+- Prefer direct, boring, maintainable code over hacky or magical
+- Push hard on type and boundary cleanliness
+- Keep logic in canonical layer, reuse existing helpers
+- Treat unnecessary sequential orchestration and non-atomic updates as design smells
+- Presumptive BLOCKERS: preserves complexity when code-judo would delete it; <1k → >1k lines; ad-hoc branching tangles flow; scatters feature checks; unnecessary abstraction/wrapper; duplicates helper or wrong layer
+- Approval bar: do NOT approve merely because behavior works
+- Few high-conviction comments; do not flood nits
+- Extra lens: Keep ponytail as additional anti-over-engineering check (loaded separately via Skill tool)
 
 The Reviewer reads the PR diff, applies the rules above, classifies each finding as BLOCKER/SUGGESTION/NITPICK, and writes `.pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md` with the list of findings. **Do not post the review to the PR yet** — the orchestrator will merge findings from both tracks before posting.
 
@@ -693,99 +646,52 @@ Head SHA: <HEAD_SHA>
 Iteration: <N> of <MAX>
 Repo root: <CWD>
 
-LOAD YOUR TWO SKILLS FIRST
-- `ponytail` (Skill tool, skill: "ponytail", falling back to "ponytail:ponytail")
-  as an extra anti-over-engineering check. The maintainability audit is the approval
-  bar; ponytail is a sanity check: does this need to exist at all? does the repo
-  already have it? stdlib? native platform? installed dependency? one line?
-- `humanizer` (Skill tool, skill: "humanizer") before you post anything. It owns
-  every word of prose you write. The maintainability audit is direct and demanding;
-  humanizer strips AI tells but keeps the directness.
-If either is unavailable in your harness, the HOUSE STYLE block below is the part of
-them this pipeline depends on — apply it by hand.
+LOAD YOUR THREE SKILLS FIRST (in this order)
+1. `thermo-nuclear-code-quality-review` (Skill tool, skill: "thermo-nuclear-code-quality-review")
+   BEFORE reading the diff. This IS the review standard: core prompt, rules 0–7,
+   questions, flag list, remedies, tone, output priority, approval bar. If unavailable,
+   fall back to the condensed FALLBACK RULES below.
+2. `ponytail` (Skill tool, skill: "ponytail", falling back to "ponytail:ponytail")
+   as an extra anti-over-engineering check AFTER the maintainability audit. Does this
+   need to exist at all? Does the repo already have it? stdlib? native platform?
+   installed dependency? one line?
+3. `humanizer` (Skill tool, skill: "humanizer") before you post anything. It owns
+   every word of prose you write. The maintainability audit is direct and demanding;
+   humanizer strips AI tells but keeps the directness.
 
-YOUR TASK — DEEP MAINTAINABILITY AUDIT
+If any skill is unavailable in your harness, the FALLBACK RULES and HOUSE STYLE blocks
+below carry the condensed version — apply those by hand.
+
+YOUR TASK
 1. Read the full diff: git diff <BASE>...<BRANCH>
 2. Read the changed files in their current state.
-3. Perform a deep code quality audit of the PR diff:
-   - Rethink how to structure/implement the changes to meaningfully improve code
-     quality without impacting behavior.
-   - Be ambitious about code structure. Look for "code judo" moves: restructurings
-     that preserve behavior while making the implementation dramatically simpler,
-     smaller, more direct, and more elegant.
-   - If you see a path to delete complexity rather than rearrange it, push hard for
-     that path.
-   - Measure twice, cut once.
-
-REVIEW RULES (0–7)
-0. Be ambitious about structural simplification.
-   - Do not stop at "this could be a bit cleaner."
-   - Look for opportunities to reframe the change so that whole branches, helpers,
-     modes, conditionals, or layers disappear entirely.
-   - Assume there is often a "code judo" move available.
-
-1. Do not let a PR push a file from under 1k lines to over 1k lines without a very
-   strong reason.
-   - Treat this as a strong code-quality smell by default.
-   - Prefer extracting helpers, subcomponents, modules instead of sprawl.
-
-2. Do not allow random spaghetti growth in existing code.
-   - Be highly suspicious of new ad-hoc conditionals, scattered special cases, or
-     one-off branches inserted into unrelated flows.
-   - Prefer pushing the logic into a dedicated abstraction.
-
-3. Bias toward cleaning the design, not just accepting working code.
-   - Do not rubber-stamp "it works" implementations that leave the codebase messier.
-
-4. Prefer direct, boring, maintainable code over hacky or magical code.
-   - Flag thin abstractions, identity wrappers, or pass-through helpers that add
-     indirection without buying clarity.
-
-5. Push hard on type and boundary cleanliness when they affect maintainability.
-   - Question unnecessary optionality, `unknown`, `any`, or cast-heavy code.
-
-6. Keep logic in the canonical layer and reuse existing helpers.
-   - Call out feature logic leaking into shared paths.
-   - Prefer existing canonical utilities/helpers over bespoke one-offs.
-
-7. Treat unnecessary sequential orchestration and non-atomic updates as design smells
-   when the cleaner structure is obvious.
-
-PRESUMPTIVE BLOCKERS (map to BLOCKER severity)
-- Preserves incidental complexity when a plausible code-judo move would delete it
-- Pushes a file from below 1000 lines to above 1000 lines
-- Adds ad-hoc branching that makes an existing flow more tangled
-- Scatters feature checks across shared code
-- Adds an unnecessary abstraction, wrapper, or cast-heavy contract
-- Duplicates an existing helper or puts logic in the wrong layer
-
-APPROVAL BAR
-Do NOT approve merely because behavior seems correct. The bar is:
-- no clear structural regression
-- no obvious missed opportunity to make the implementation dramatically simpler
-- no unjustified file-size explosion
-- no spaghetti-growth from special-case branching
-- no obviously hacky abstraction
-- no unnecessary wrapper/cast/optionality churn
-- no clear architecture-boundary leak
+3. Apply the `thermo-nuclear-code-quality-review` skill you loaded above. It defines
+   the review standard: core prompt, rules 0–7, questions, flag list, remedies, tone,
+   output priority, approval bar.
+4. Apply the `ponytail` lens as an extra anti-over-engineering check.
 
 CLASSIFICATION
 Each finding is exactly one of:
-  BLOCKER    — presumptive blocker from the list above, or major structural regression
+  BLOCKER    — presumptive blocker from the loaded skill, or major structural regression
   SUGGESTION — should likely be fixed, but not a blocker
   NITPICK    — optional/aesthetic
 
-PRIORITY (report in this order)
-1. Structural code-quality regressions
-2. Missed opportunities for dramatic simplification / code-judo restructuring
-3. Spaghetti / branching complexity increases
-4. Boundary / abstraction / type-contract problems
-5. File-size and decomposition concerns
-6. Modularity and abstraction issues
-7. Legibility and maintainability concerns
-
-DO NOT FLOOD NITS. Prefer a smaller number of high-conviction comments over a long
-list of cosmetic notes.
+FALLBACK RULES (use ONLY if the skill failed to load)
+If `thermo-nuclear-code-quality-review` is unavailable:
+- Perform deep code quality audit; be ambitious about structural simplification
+- Look for "code judo" moves that delete complexity rather than rearrange it
+- Do not let PR push file <1k → >1k lines without very strong reason
+- Do not allow random spaghetti growth (ad-hoc conditionals in unrelated flows)
+- Bias toward cleaning design, not just accepting working code
+- Prefer direct, boring, maintainable over hacky or magical
+- Push hard on type and boundary cleanliness
+- Keep logic in canonical layer, reuse existing helpers
+- Treat unnecessary sequential orchestration and non-atomic updates as design smells
+- Presumptive BLOCKERS: preserves complexity when code-judo would delete it; <1k → >1k
+  lines; ad-hoc branching tangles flow; scatters feature checks; unnecessary
+  abstraction/wrapper; duplicates helper or wrong layer
+- Approval bar: do NOT approve merely because behavior works
+- Few high-conviction comments; do not flood nits
 
 FINDINGS FORMAT (do NOT post the review to the PR yet)
 You MUST format each finding as an INLINE comment anchored to the exact file +
