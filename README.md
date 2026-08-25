@@ -18,6 +18,8 @@ A [Claude Code skill](https://docs.claude.com/en/docs/claude-code/skills) that o
 
 `pr-autopilot` turns a long, manual PR ritual into a single command. It spawns a **Reviewer** subagent that audits your diff and an **Author** subagent that clears everything standing between the branch and a clean merge: every comment already on the PR (yours, your teammates', Copilot's, CodeRabbit's, Sonar's), merge conflicts, and failing CI. It loops until the PR is green, then merges.
 
+**The Reviewer runs two parallel tracks** when the PR diff contains tests: (A) a code-review track that audits for correctness, security, performance, and over-engineering, and (B) a test-nuke track ("Nuke bad tests - Luke Berry") that evaluates tests by value and flags removal candidates (tautologies, always-green tests, unjustified cost). Two independent rankers assess the tests, a consolidator reconciles their findings, and the orchestrator merges all findings into one review posted on the PR. When the diff contains no tests, only the code-review track runs.
+
 Two things it will not do on its own. When a change would touch a **business rule**, the Author stops and confirms the intended behavior with you first, via the [`groom-me`](https://github.com/FelipeOFF/skills/tree/main/skills/groom-me) skill. And when CI is red for a reason that predates your branch, it never patches around the failure — it asks before writing "this pipeline is broken for another reason" on your PR, and says it once, never twice.
 
 ```
