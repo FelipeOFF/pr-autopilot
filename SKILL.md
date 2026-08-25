@@ -1,6 +1,6 @@
 ---
 name: pr-autopilot
-description: Orchestrates the full lifecycle of a Pull Request — creation, multi-agent code review (composing Luke Berry's "nuke bad tests" ritual with standard code review when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
+description: Orchestrates the full lifecycle of a Pull Request — creation, two-track multi-agent code review (deep maintainability audit for code judo + test-value assessment when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
 argument-hint: "[--auto] [--review] [--resolve] [--merge] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
 ---
 
@@ -10,7 +10,7 @@ End-to-end PR pipeline: **create → (review → respond → re-review loop) →
 
 **Everything past PR creation is opt-in.** Every boolean flag defaults to `false`. With no flags the skill creates the PR and stops. You switch on each stage explicitly (`--review`, `--resolve`, `--merge`) or turn them all on at once with `--auto`.
 
-**Phase 2 review runs two parallel tracks** when `--review` or `--auto` is set: (A) a code-review track that audits the full diff for correctness/security/performance/quality, and (B) a test-nuke track ("Nuke bad tests - Luke Berry") that evaluates tests in the PR diff by value and identifies removal candidates. Both tracks' findings are merged into one `review-report.md` and posted as one review on the PR. The test-nuke track only runs when the PR diff contains test files; otherwise it is skipped and only the code-review track runs.
+**Phase 2 review runs two parallel tracks** when `--review` or `--auto` is set: (A) a **code track** that runs a deep maintainability audit for code judo, abstraction quality, file size, spaghetti growth, and structural simplification (the approval bar), and (B) a **test track** that evaluates tests in the PR diff by value and identifies removal candidates (tautologies, always-green, unjustified cost). Both tracks' findings are merged into one `review-report.md` and posted as one review on the PR. The test track only runs when the PR diff contains test files; otherwise it is skipped and only the code track runs.
 
 This skill is **rigid**. Follow the phases in order. Do not skip the verification gates between phases. Coordinate subagents via the `Task` tool (or `Agent` tool depending on harness). Persist intermediate artifacts to `.pr-autopilot/<pr-number>/` so iterations and re-runs are recoverable.
 
@@ -242,9 +242,10 @@ create the PR and stop.
 │      ▼                                                          │
 │  Phase 2: Two parallel tracks (skipped when --resolve w/o       │
 │      │    --review):                                            │
-│      │    A) Code review (Task)  ──► review-report.md           │
-│      │    B) Test nuke (2 ranker Tasks + 1 consolidator) ──►    │
-│      │       nuke-a.md, nuke-b.md, nuke-consolidated.md         │
+│      │    A) Code track (Task)  ──► review-report.md            │
+│      │    B) Test track (2 ranker Tasks + 1 consolidator) ──►   │
+│      │       test-ranker-a.md, test-ranker-b.md,                │
+│      │       test-consolidated.md                               │
 │      │    Orchestrator merges findings → posts one review       │
 │      ▼                                                          │
 │  Phase 3: Author subagent (Task)    ──► pr-feedback.md          │
@@ -389,12 +390,12 @@ Route by the flags that are on (`--auto` implies `--review`, `--resolve` and
 
 ---
 
-## 4. Phase 2 — Reviewer Subagent (inline comments) + Test Nuke Track
+## 4. Phase 2 — Two-Track Review: Maintainability + Test Value
 
 Phase 2 runs **two parallel tracks** that feed into one consolidated review:
 
-1. **Code review track** — the existing Reviewer subagent that audits the full diff for correctness, security, performance, code quality, and over-engineering
-2. **Test nuke track** ("Nuke bad tests - Luke Berry") — two independent rankers evaluate tests in the PR diff by value, followed by a consolidator that produces a final removal/justification plan
+1. **Code track** — deep maintainability audit of the PR diff for code judo, abstraction quality, file size, spaghetti growth, and structural simplification. This is the approval bar. Few high-conviction comments; do not flood nits.
+2. **Test track** — test-value assessment: two independent rankers evaluate tests in the PR diff by value, followed by a consolidator that produces a final removal/justification plan
 
 Both tracks post their findings as inline comments on the exact file + line they refer to, and the orchestrator merges them into a single `review-report.md` and a single posted GitHub/GitLab review.
 
@@ -409,15 +410,83 @@ The orchestrator first reads the PR diff to identify test files. Use common test
 
 Scoping: the test nuke track evaluates tests **in the PR diff** and tests they clearly depend on (e.g. shared test helpers imported by those tests). It does not require ranking the entire repo suite unless the PR is test-only and the diff is small (<200 lines of test code).
 
-### 4.1 Code review track — the existing Reviewer
+### 4.1 Code track — deep maintainability audit
 
-Spawn one `Task` subagent with `subagent_type: "general-purpose"` (or `code-reviewer` if available). This is the existing Phase 2 behavior, unchanged. The prompt template in §4.5 applies here.
+Spawn one `Task` subagent with `subagent_type: "general-purpose"` (or `code-reviewer` if available). This replaces the old "correctness-only" reviewer with a deep maintainability audit. The prompt template in §4.5 applies here.
 
-The Reviewer reads the full diff, evaluates correctness/security/performance/code-quality/over-engineering, classifies each finding as BLOCKER/SUGGESTION/NITPICK, and writes `.pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md` with the list of findings. **Do not post the review to the PR yet** — the orchestrator will merge findings from both tracks before posting.
+**Source**: [thermo-nuclear-code-quality-review](https://github.com/cursor/plugins/tree/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review) skill (cursor/plugins). Upstream skill has `disable-model-invocation: true` (explicit ask required); inside pr-autopilot, `--review` / `--auto` IS that explicit ask. Do not run this on `--resolve`-only.
 
-### 4.2 Test nuke track — "Nuke bad tests - Luke Berry"
+**Core mission**: Perform a deep code quality audit of the PR diff. Rethink how to structure/implement the changes to meaningfully improve code quality without impacting behavior. Be ambitious about code structure. Look for "code judo" moves: restructurings that preserve behavior while making the implementation dramatically simpler, smaller, more direct, and more elegant. Measure twice, cut once.
 
-This track runs in parallel with the code review track, only when the PR diff contains test files (§4.0).
+**Review rules (0–7, from upstream skill)**:
+
+0. **Be ambitious about structural simplification.**
+   - Do not stop at "this could be a bit cleaner." Look for opportunities to reframe the change so that whole branches, helpers, modes, conditionals, or layers disappear entirely.
+   - Assume there is often a "code judo" move available: a re-organization that uses the existing architecture more effectively and makes the change dramatically simpler.
+   - If you see a path to delete complexity rather than rearrange it, push hard for that path.
+
+1. **Do not let a PR push a file from under 1k lines to over 1k lines without a very strong reason.**
+   - Treat this as a strong code-quality smell by default.
+   - Prefer extracting helpers, subcomponents, modules, or local abstractions instead of letting a file sprawl past 1000 lines.
+   - Only waive this if there is a compelling structural reason and the resulting file is still clearly organized.
+
+2. **Do not allow random spaghetti growth in existing code.**
+   - Be highly suspicious of new ad-hoc conditionals, scattered special cases, or one-off branches inserted into unrelated flows.
+   - Prefer pushing the logic into a dedicated abstraction, helper, state machine, policy object, or separate module instead of tangling an existing path.
+   - Call out changes that make the surrounding code harder to reason about, even if they technically work.
+
+3. **Bias toward cleaning the design, not just accepting working code.**
+   - If behavior can stay the same while the structure becomes meaningfully cleaner, push for the cleaner version.
+   - Do not rubber-stamp "it works" implementations that leave the codebase messier.
+
+4. **Prefer direct, boring, maintainable code over hacky or magical code.**
+   - Treat brittle, ad-hoc, or "magic" behavior as a code-quality problem.
+   - Be skeptical of generic mechanisms that hide simple data-shape assumptions.
+   - Flag thin abstractions, identity wrappers, or pass-through helpers that add indirection without buying clarity.
+
+5. **Push hard on type and boundary cleanliness when they affect maintainability.**
+   - Question unnecessary optionality, `unknown`, `any`, or cast-heavy code when a clearer type boundary could exist.
+   - Prefer explicit typed models or shared contracts over loosely-shaped ad-hoc objects.
+
+6. **Keep logic in the canonical layer and reuse existing helpers.**
+   - Call out feature logic leaking into shared paths or implementation details leaking through APIs.
+   - Prefer existing canonical utilities/helpers over bespoke one-offs.
+   - Push code toward the right package, service, or module instead of normalizing architectural drift.
+
+7. **Treat unnecessary sequential orchestration and non-atomic updates as design smells when the cleaner structure is obvious.**
+   - If independent work is serialized for no good reason, ask whether the flow should run in parallel instead.
+   - If related updates can leave state half-applied, push for a more atomic structure.
+
+**Presumptive BLOCKERS** (map to pr-autopilot `BLOCKER` severity):
+- The PR preserves a lot of incidental complexity when there is a plausible code-judo move that would delete it
+- The PR pushes a file from below 1000 lines to above 1000 lines
+- The PR adds ad-hoc branching that makes an existing flow more tangled
+- The PR scatters feature checks across shared code
+- The PR adds an unnecessary abstraction, wrapper, or cast-heavy contract that makes the design more indirect
+- The PR duplicates an existing helper or puts logic in the wrong layer when there is a clear canonical home
+
+**Approval bar**: Do NOT approve merely because behavior seems correct. The bar is: no clear structural regression, no obvious missed opportunity to make the implementation dramatically simpler, no unjustified file-size explosion, no spaghetti-growth from special-case branching, no obviously hacky abstraction, no unnecessary wrapper/cast/optionality churn, no clear architecture-boundary leak.
+
+**Tone**: Direct, serious, and demanding about quality. Not rude, but do not soften major maintainability issues into mild suggestions. humanizer still owns posted prose (strip AI tells, keep the directness).
+
+**Priority** (report in this order):
+1. Structural code-quality regressions
+2. Missed opportunities for dramatic simplification / code-judo restructuring
+3. Spaghetti / branching complexity increases
+4. Boundary / abstraction / type-contract problems
+5. File-size and decomposition concerns
+6. Modularity and abstraction issues
+7. Legibility and maintainability concerns
+
+**Do NOT flood nits.** Prefer a smaller number of high-conviction comments over a long list of cosmetic notes.
+
+**Extra lens**: Keep ponytail as an additional anti-over-engineering check (does this need to exist at all? does the repo already have it? stdlib? native platform? installed dependency? one line?). Thermo-Nuclear is the approval bar; ponytail is a sanity check.
+
+The Reviewer reads the PR diff, applies the rules above, classifies each finding as BLOCKER/SUGGESTION/NITPICK, and writes `.pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md` with the list of findings. **Do not post the review to the PR yet** — the orchestrator will merge findings from both tracks before posting.
+
+### 4.2 Test track — test-value assessment
+
+This track runs in parallel with the code track, only when the PR diff contains test files (§4.0).
 
 **Step A — spawn two independent rankers**
 
@@ -472,8 +541,8 @@ think the code is simple.
 ```
 
 Each ranker writes its output to a local file:
-- Ranker 1 → `.pr-autopilot/<PR_NUMBER>/iter-<N>/nuke-a.md`
-- Ranker 2 → `.pr-autopilot/<PR_NUMBER>/iter-<N>/nuke-b.md`
+- Ranker 1 → `.pr-autopilot/<PR_NUMBER>/iter-<N>/test-ranker-a.md`
+- Ranker 2 → `.pr-autopilot/<PR_NUMBER>/iter-<N>/test-ranker-b.md`
 
 The orchestrator waits for both rankers to complete before proceeding.
 
@@ -482,7 +551,7 @@ The orchestrator waits for both rankers to complete before proceeding.
 Launch one `Task` subagent with `subagent_type: "general-purpose"`, with **no inherited review context** (isolated), given only the two ranker outputs:
 
 ```
-You are the test-nuke consolidator in the pr-autopilot pipeline.
+You are the test-value consolidator in the pr-autopilot pipeline.
 
 PR: <PR_URL>
 PR number: <PR_NUMBER>
@@ -490,8 +559,8 @@ Iteration: <N>
 Repo root: <CWD>
 
 Your inputs:
-- .pr-autopilot/<PR_NUMBER>/iter-<N>/nuke-a.md  (ranker 1)
-- .pr-autopilot/<PR_NUMBER>/iter-<N>/nuke-b.md  (ranker 2)
+- .pr-autopilot/<PR_NUMBER>/iter-<N>/test-ranker-a.md  (ranker 1)
+- .pr-autopilot/<PR_NUMBER>/iter-<N>/test-ranker-b.md  (ranker 2)
 
 Your task:
 1. Read both ranker reports.
@@ -524,14 +593,14 @@ Every addition and removal must be justified objectively. "Low value" or "redund
 without citing the specific duplication or tautology is not sufficient. Missing
 justification is not a BLOCKER by itself — downgrade to SUGGESTION.
 
-Write your output to .pr-autopilot/<PR_NUMBER>/iter-<N>/nuke-consolidated.md
+Write your output to .pr-autopilot/<PR_NUMBER>/iter-<N>/test-consolidated.md
 ```
 
-The consolidator writes `.pr-autopilot/<PR_NUMBER>/iter-<N>/nuke-consolidated.md`.
+The consolidator writes `.pr-autopilot/<PR_NUMBER>/iter-<N>/test-consolidated.md`.
 
 **Step C — map to inline comments**
 
-The orchestrator reads `nuke-consolidated.md` and converts each removal candidate into an inline comment on the test file:
+The orchestrator reads `test-consolidated.md` and converts each removal candidate into an inline comment on the test file:
 
 - **Candidate for removal, strong justification (tautology / always-green / mocking the unit under test)** → `BLOCKER` severity, posted as an inline comment on the test's opening line.
 - **Candidate for removal, weaker justification (unjustified cost / unclear duplication)** → `SUGGESTION` severity.
@@ -547,7 +616,7 @@ Blocking: this test mocks `calculateTotal` and asserts the mock's return value, 
 <!-- pr-autopilot:severity=blocker -->
 ```
 
-These nuke-track findings are added to the same `findings` array the code-review track produces, before the orchestrator posts the consolidated review in §4.6.
+These test-track findings are added to the same `findings` array the code track produces, before the orchestrator posts the consolidated review in §4.6.
 
 ### 4.4 How to post inline comments (both tracks)
 
@@ -605,13 +674,14 @@ glab api -X POST "projects/:id/merge_requests/<MR_IID>/discussions" \
 
 Repeat per finding. GitLab does not bundle them into a single review object.
 
-### 4.5 Reviewer prompt template (code review track)
+### 4.5 Reviewer prompt template (code track — deep maintainability audit)
 
-This template is for the code-review-track subagent. The orchestrator will merge your findings with those from the test-nuke track (if it ran) before posting the review.
+This template is for the code-track subagent. The orchestrator will merge your findings with those from the test track (if it ran) before posting the review.
 
 ```
-You are the Reviewer agent in the pr-autopilot pipeline (code review track). You are
-stateless and have no prior context — everything you need is below.
+You are the Reviewer agent in the pr-autopilot pipeline (code track — deep
+maintainability audit). You are stateless and have no prior context — everything you
+need is below.
 
 PR: <PR_URL>
 Platform: <github|gitlab>
@@ -625,34 +695,97 @@ Repo root: <CWD>
 
 LOAD YOUR TWO SKILLS FIRST
 - `ponytail` (Skill tool, skill: "ponytail", falling back to "ponytail:ponytail")
-  before you read the diff. It is the lens of this review: the best code is the code
-  that was never written. Every fix you suggest is the laziest version that works.
+  as an extra anti-over-engineering check. The maintainability audit is the approval
+  bar; ponytail is a sanity check: does this need to exist at all? does the repo
+  already have it? stdlib? native platform? installed dependency? one line?
 - `humanizer` (Skill tool, skill: "humanizer") before you post anything. It owns
-  every word of prose you write.
+  every word of prose you write. The maintainability audit is direct and demanding;
+  humanizer strips AI tells but keeps the directness.
 If either is unavailable in your harness, the HOUSE STYLE block below is the part of
 them this pipeline depends on — apply it by hand.
 
-YOUR TASK
+YOUR TASK — DEEP MAINTAINABILITY AUDIT
 1. Read the full diff: git diff <BASE>...<BRANCH>
 2. Read the changed files in their current state.
-3. Evaluate against:
-   - Correctness and edge cases
-   - Security (injection, secret leakage, authz bypass, OWASP-class)
-   - Performance (N+1, unbounded loops, blocking I/O on hot paths)
-   - Code quality (naming, dead code, missing error paths at trust boundaries)
-   - Over-engineering, the ponytail lens: an abstraction with one caller, a new
-     dependency for what a few lines do, config for a value that never changes,
-     a helper reimplemented when the repo already has one two files over,
-     scaffolding built "for later", a wrapper that only forwards arguments.
-     Deleting code is a valid finding. So is "this whole file did not need to exist".
-   - Consistency with surrounding codebase patterns
-   - Test coverage proportional to risk
+3. Perform a deep code quality audit of the PR diff:
+   - Rethink how to structure/implement the changes to meaningfully improve code
+     quality without impacting behavior.
+   - Be ambitious about code structure. Look for "code judo" moves: restructurings
+     that preserve behavior while making the implementation dramatically simpler,
+     smaller, more direct, and more elegant.
+   - If you see a path to delete complexity rather than rearrange it, push hard for
+     that path.
+   - Measure twice, cut once.
+
+REVIEW RULES (0–7)
+0. Be ambitious about structural simplification.
+   - Do not stop at "this could be a bit cleaner."
+   - Look for opportunities to reframe the change so that whole branches, helpers,
+     modes, conditionals, or layers disappear entirely.
+   - Assume there is often a "code judo" move available.
+
+1. Do not let a PR push a file from under 1k lines to over 1k lines without a very
+   strong reason.
+   - Treat this as a strong code-quality smell by default.
+   - Prefer extracting helpers, subcomponents, modules instead of sprawl.
+
+2. Do not allow random spaghetti growth in existing code.
+   - Be highly suspicious of new ad-hoc conditionals, scattered special cases, or
+     one-off branches inserted into unrelated flows.
+   - Prefer pushing the logic into a dedicated abstraction.
+
+3. Bias toward cleaning the design, not just accepting working code.
+   - Do not rubber-stamp "it works" implementations that leave the codebase messier.
+
+4. Prefer direct, boring, maintainable code over hacky or magical code.
+   - Flag thin abstractions, identity wrappers, or pass-through helpers that add
+     indirection without buying clarity.
+
+5. Push hard on type and boundary cleanliness when they affect maintainability.
+   - Question unnecessary optionality, `unknown`, `any`, or cast-heavy code.
+
+6. Keep logic in the canonical layer and reuse existing helpers.
+   - Call out feature logic leaking into shared paths.
+   - Prefer existing canonical utilities/helpers over bespoke one-offs.
+
+7. Treat unnecessary sequential orchestration and non-atomic updates as design smells
+   when the cleaner structure is obvious.
+
+PRESUMPTIVE BLOCKERS (map to BLOCKER severity)
+- Preserves incidental complexity when a plausible code-judo move would delete it
+- Pushes a file from below 1000 lines to above 1000 lines
+- Adds ad-hoc branching that makes an existing flow more tangled
+- Scatters feature checks across shared code
+- Adds an unnecessary abstraction, wrapper, or cast-heavy contract
+- Duplicates an existing helper or puts logic in the wrong layer
+
+APPROVAL BAR
+Do NOT approve merely because behavior seems correct. The bar is:
+- no clear structural regression
+- no obvious missed opportunity to make the implementation dramatically simpler
+- no unjustified file-size explosion
+- no spaghetti-growth from special-case branching
+- no obviously hacky abstraction
+- no unnecessary wrapper/cast/optionality churn
+- no clear architecture-boundary leak
 
 CLASSIFICATION
 Each finding is exactly one of:
-  BLOCKER    — must be fixed before merge
-  SUGGESTION — should likely be fixed
+  BLOCKER    — presumptive blocker from the list above, or major structural regression
+  SUGGESTION — should likely be fixed, but not a blocker
   NITPICK    — optional/aesthetic
+
+PRIORITY (report in this order)
+1. Structural code-quality regressions
+2. Missed opportunities for dramatic simplification / code-judo restructuring
+3. Spaghetti / branching complexity increases
+4. Boundary / abstraction / type-contract problems
+5. File-size and decomposition concerns
+6. Modularity and abstraction issues
+7. Legibility and maintainability concerns
+
+DO NOT FLOOD NITS. Prefer a smaller number of high-conviction comments over a long
+list of cosmetic notes.
 
 FINDINGS FORMAT (do NOT post the review to the PR yet)
 You MUST format each finding as an INLINE comment anchored to the exact file +
@@ -775,13 +908,13 @@ with test-nuke findings (if any) and post one consolidated GitHub/GitLab review.
 
 ### 4.6 Orchestrator — merge tracks and post one review
 
-After both tracks complete (or after the code-review track alone when no tests are in the diff), the orchestrator:
+After both tracks complete (or after the code track alone when no tests are in the diff), the orchestrator:
 
-1. **Read the code-review artifact**: `.pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md`
-2. **Read the test-nuke artifact** (if it ran): `.pr-autopilot/<PR_NUMBER>/iter-<N>/nuke-consolidated.md`
+1. **Read the code-track artifact**: `.pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md`
+2. **Read the test-track artifact** (if it ran): `.pr-autopilot/<PR_NUMBER>/iter-<N>/test-consolidated.md`
 3. **Parse findings from both**:
-   - Code-review findings are already structured with `path`, `line`, `side`, `body` in `review-report.md`
-   - Test-nuke findings are in `nuke-consolidated.md` under "Consolidated removal candidates" — convert each to the same structure:
+   - Code-track findings are already structured with `path`, `line`, `side`, `body` in `review-report.md`
+   - Test-track findings are in `test-consolidated.md` under "Consolidated removal candidates" — convert each to the same structure:
      - Extract `file:line` from the bullet (`src/foo.test.ts:42`)
      - `path` = `src/foo.test.ts`
      - `line` = `42`
@@ -792,8 +925,8 @@ After both tracks complete (or after the code-review track alone when no tests a
 5. **Update the front-matter** of `review-report.md`:
    - Recalculate `blocker_count`, `suggestion_count`, `nitpick_count` across both tracks
    - Set `verdict: CHANGES_REQUESTED` if any BLOCKER, else `APPROVED`
-   - Add `test_nuke: ran` or `test_nuke: skipped — no tests in diff`
-6. **Append test-nuke findings** to the "## Inline findings" section of `review-report.md`, preserving the structured format.
+   - Add `test_track: ran` or `test_track: skipped — no tests in diff`
+6. **Append test-track findings** to the "## Inline findings" section of `review-report.md`, preserving the structured format.
 7. **Post the consolidated review** to GitHub/GitLab using the merged findings array:
    - GitHub: one `gh api -X POST repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews` with all `comments[]` from both tracks, `event=REQUEST_CHANGES` if any BLOCKER, else `COMMENT`
    - GitLab: one `glab api POST` per finding (GitLab doesn't batch them)
@@ -812,7 +945,7 @@ After both tracks complete and the consolidated review is posted (§4.6), parse 
 - `verdict: CHANGES_REQUESTED` and `--resolve` on → proceed to **Phase 3**.
 - Malformed front-matter, or any finding without a `comment_id` → re-spawn tracks once with explicit format reminder; on second failure, escalate to user.
 
-The `blocker_count`, `suggestion_count`, and `nitpick_count` in the front-matter now reflect the sum of findings from both the code-review track and the test-nuke track (when it ran). The Author in Phase 3 works the merged `review-report.md` the same way it always has — it sees no difference between a finding from the code-review track and one from the test-nuke track.
+The `blocker_count`, `suggestion_count`, and `nitpick_count` in the front-matter now reflect the sum of findings from both the code track and the test track (when it ran). The Author in Phase 3 works the merged `review-report.md` the same way it always has — it sees no difference between a finding from the code track and one from the test track.
 
 ---
 
@@ -1645,17 +1778,17 @@ Layout under `.pr-autopilot/<PR_NUMBER>/`:
 
 ```
 state.json                       # {iteration, status, pr_url, platform, started_at}
-iter-1/review-report.md          # merged findings from code-review + test-nuke tracks
+iter-1/review-report.md          # merged findings from code + test tracks
                                  # (absent when --resolve runs without --review)
-iter-1/nuke-a.md                 # test-nuke ranker 1 output (only when tests in diff)
-iter-1/nuke-b.md                 # test-nuke ranker 2 output (only when tests in diff)
-iter-1/nuke-consolidated.md      # consolidator output (only when tests in diff)
+iter-1/test-ranker-a.md          # test ranker 1 output (only when tests in diff)
+iter-1/test-ranker-b.md          # test ranker 2 output (only when tests in diff)
+iter-1/test-consolidated.md      # consolidator output (only when tests in diff)
 iter-1/pr-feedback.md            # inventory of every comment already on the PR
 iter-1/response-summary.md
 iter-2/review-report.md
-iter-2/nuke-a.md
-iter-2/nuke-b.md
-iter-2/nuke-consolidated.md
+iter-2/test-ranker-a.md
+iter-2/test-ranker-b.md
+iter-2/test-consolidated.md
 iter-2/pr-feedback.md
 iter-2/response-summary.md
 ci/last-poll.json
