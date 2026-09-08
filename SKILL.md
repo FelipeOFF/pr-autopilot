@@ -28,7 +28,7 @@ and anything they spawn.
 | Natural-language prose | `humanizer`, then `unslop` when `--unslop` is on | Generated title and body, review summary, every inline comment, every inline reply, the CI triage comment, the PR briefing after the section opener |
 | Code | `ponytail` | Every fix the Author writes, every snippet the Reviewer suggests, conflict resolutions, CI repairs |
 | PR visual views | `show-me` | Mermaid, file tree, call tree, markdown diff inside the PR visual section. Never HTML. |
-| Comment views | `show-me` | Same four shapes, one per Reviewer finding when `--show-me --review`. Never HTML. Not the PR visual section. |
+| Comment views | `show-me` | Same four shapes, one per Reviewer finding when `--show-me --review`, one per Author reply and posted CI triage comment when `--show-me --resolve`. Never HTML. Not the PR visual section. |
 
 Invoke them with the `Skill` tool — `skill: "humanizer"`, `skill: "unslop"`,
 `skill: "ponytail"`, `skill: "show-me"`. Some harnesses namespace ponytail as
@@ -38,13 +38,15 @@ visual section keeps the condensed `show-me` fallback in §3.4. **Comment views
 do not.** If `--show-me` is on and `show-me` cannot load: print an alert that
 names `show-me` and the install line `npx skills add FelipeOFF/skills --skill=show-me`,
 emit no HTML, do not invent a comment view, and continue the rest of the
-pipeline (§4.3). Print that alert once per run. **`unslop` is different:** when
+pipeline (§4.3, §5.8). Print that alert once per run. **`unslop` is different:** when
 `--unslop` is on and the skill cannot load, print the alert in §0.4 and do
 **not** fake the pass. Subagent prompt templates (§4.5, §5.6) carry their own
 copy of house style — a subagent is stateless and never reads this file. The
 orchestrator owns the PR visual section; Reviewer and Author do not write it.
 The Reviewer prompt receives this run's `--show-me` bit so it can load `show-me`
-for comment views. The Author still must not rewrite the PR description.
+for finding comment views. The Author prompt receives the same bit so it can
+load `show-me` for replies and CI triage. The Author still must not rewrite
+the PR description.
 
 Local artifacts under `.pr-autopilot/` are the exception. They are machine state that
 nobody reads on the PR, so their front-matter and `Action:` fields keep the flat
@@ -236,7 +238,13 @@ on(posted)
       alert + npx install line
       # prose stays humanizer-only; do not fake unslop
   if kind in {finding, reply, ci-triage}
-    return prose + marker alone on last line
+    if kind in {reply, ci-triage} and --show-me and show-me skill loaded this run
+      view = exactly one of {mermaid, file tree, call tree, markdown diff}
+    else
+      view = none   # findings: view is added in posted_finding (§4.3)
+    return prose + (blank line + view if any) + marker alone on last line
+    # --show-me on and skill missing: same alert as §4.3 / §5.8; do not invent
+    # a view; post prose + marker; pipeline continues. Never HTML.
   return prose
 ```
 
@@ -253,6 +261,10 @@ on(posted)
 9. `--unslop` without `--review` → no review is generated.
 10. `--body` + `--unslop` → starting body humanized then unslopped on sentence prose; Test plan checklists, paths, and backticks intact; `--show-me` apply still runs if that flag is on.
 11. Section opener, markers, fences, trees, diffs, paths, SHAs, and command lines are bit-identical to the draft; marker remains the last line of a finding, reply, or CI triage comment.
+12. `--show-me --resolve` and show-me loaded, kind=`reply` → humanized (then unslopped if `--unslop`) + exactly one of the four views + marker last line (§5.8).
+13. `--resolve` without `--show-me`, kind=`reply` → prose + marker, no view.
+14. `--show-me --resolve` and show-me loaded, kind=`ci-triage` → exactly one view; `<!-- pr-autopilot:ci-triage:<check-name> -->` last line.
+15. `--show-me` on, skill missing, kind=`reply` or `ci-triage` → alert + npx; posted without view, no HTML.
 
 ---
 
@@ -283,7 +295,9 @@ Rules that tie the flags together:
 - `--auto` is shorthand for `--review --resolve --merge` plus a "never prompt for confirmation" semantic **and** the aggressive-resolution behavior: in `--auto` (and any `--resolve`) run, the Author resolves merge conflicts and fixes failing CI, not just review comments.
 - `--auto` does **not** turn on `--show-me` or `--unslop`. The PR visual section
   and comment views are a separate opt-in. `--show-me` without `--review` still
-  only means the PR visual section (existing behavior), not a new review.
+  only means the PR visual section (existing behavior), not a new review —
+  unless `--resolve` is also on, in which case unreplied replies and a posted
+  CI triage comment each get one comment view.
 - `--draft` forces no merge even when `--merge`/`--auto` is set.
 - **No prompts means no consent.** Anything that needs the developer's explicit yes — a business-rule change (`groom-me`), or a comment claiming CI is red for reasons outside the PR — is never done silently in `--auto` or in a non-interactive run. It is recorded as `escalated` instead.
 
@@ -309,7 +323,7 @@ required check green AND the PR is `MERGEABLE`.
 | `--ci-poll-interval` | `30` | Seconds between status polls. Backs off to 60s after 10 polls. |
 | `--title` | auto-generated | Override generated title. |
 | `--body` | auto-generated | Override generated body. Starting point for `--show-me` apply; the flag still appends or replaces the PR visual section. Sentence prose still goes through `posted` (§0.4). |
-| `--show-me` | `false` | Append (or replace) a PR visual section on the PR description so a human reviewer can read what the change does before the diff. Combined with `--review`, every Reviewer finding also gets one comment view (mermaid / file tree / call tree / markdown diff, never HTML) on the same line as the finding. Not implied by `--auto`. |
+| `--show-me` | `false` | Append (or replace) a PR visual section on the PR description so a human reviewer can read what the change does before the diff. Combined with `--review`, every Reviewer finding also gets one comment view (mermaid / file tree / call tree / markdown diff, never HTML) on the same line as the finding. Combined with `--resolve`, every Author reply on a thread that still has no reply, and a posted CI triage comment, also get exactly one comment view. Marker stays last. Not implied by `--auto`. |
 | `--unslop` | `false` | After humanizer, run posted prose through `unslop` in the invoker's soul (§0.4). Not implied by `--auto`. |
 
 Boolean flags accept a bare form (`--review`, `--unslop`) or an explicit value
@@ -354,8 +368,8 @@ Invocation examples:
 - `pr-autopilot --auto --merge-strategy=rebase --max-iterations=3`
 - `pr-autopilot --show-me` → create the PR with a PR visual section, then stop
 - `pr-autopilot --show-me --review` → PR visual section **and** one comment view on each Reviewer finding
-- `pr-autopilot --show-me --resolve` → section on create, regenerate after an Author push that changed the diff
-- `pr-autopilot --auto --show-me` → full hands-off **and** the section (still not implied by `--auto` alone); because `--auto` already turns on `--review`, findings get comment views too
+- `pr-autopilot --show-me --resolve` → section on create; one comment view on each unreplied reply and on a posted CI triage comment; regenerate the section after an Author push that changed the diff
+- `pr-autopilot --auto --show-me` → full hands-off **and** the section (still not implied by `--auto` alone); because `--auto` already turns on `--review` and `--resolve`, findings, unreplied replies, and a posted CI triage comment get comment views too
 - `pr-autopilot --unslop` → create the PR; generated title and body are humanized then unslopped
 - `pr-autopilot --unslop --review` → each Reviewer finding body is humanized then unslopped
 - `pr-autopilot --unslop --resolve` → each Author reply (and a posted CI triage comment) is humanized then unslopped
@@ -415,8 +429,9 @@ invoke `humanizer` for prose, then `unslop` when the flag is on, and `ponytail`
 for code. Humanizer and ponytail keep their condensed fallbacks when missing;
 unslop does not — missing unslop with the flag on is the alert in §0.4. The
 Reviewer prompt also receives this run's `--show-me` bit. When it is on, the
-Reviewer loads `show-me` for comment views (§4.3). The Author still must not
-edit the PR description.
+Reviewer loads `show-me` for finding comment views (§4.3). The Author prompt
+receives the same bit. When it is on, the Author loads `show-me` for replies
+and CI triage only (§5.8). The Author still must not edit the PR description.
 
 Phase 3 only runs under `--resolve`/`--auto`, and when those flags are on it
 **always** runs after Phase 2 — including when the Reviewer verdict is APPROVED.
@@ -573,7 +588,7 @@ approve.>
    those views. A one-line config change gets a small view, not a sequence
    diagram. A large diff gets the slice the reviewer needs, not a map of the
    repo. Never skip the PR visual silently. Never emit HTML. Do **not** use
-   this fallback to invent **comment views** (§4.3) — those stay omitted when
+   this fallback to invent **comment views** (§4.3, §5.8) — those stay omitted when
    the skill is missing. Format:
    - mermaid → a fenced block with language `mermaid` (flowchart or sequence)
    - file tree → indented tree; every path in backticks
@@ -868,13 +883,15 @@ These test-track findings are added to the same `findings` array the code track 
 A **comment view** is a show-me view inside a posted Reviewer finding. Same four
 shapes as a PR visual (mermaid, file tree, call tree, markdown diff). Never HTML.
 Not the PR visual section. One view per finding, in the same inline comment, on
-the same line as the finding. The marker stays alone on the last line.
+the same line as the finding. The marker stays alone on the last line. Author
+replies and posted CI triage comments get the same treatment under
+`--show-me --resolve` (§5.8).
 
 Skip this whole section when `--show-me` is off **or** `--review` is off.
 `--review` without `--show-me` stays prose-only. `--show-me` without `--review`
-still only means the PR visual section (§3.4). `--auto` does not turn `--show-me`
-on; `--auto --show-me` does, and because `--auto` already turns on `--review`,
-findings get comment views too.
+still only means the PR visual section (§3.4) unless `--resolve` is also on
+(§5.8). `--auto` does not turn `--show-me` on; `--auto --show-me` does, and
+because `--auto` already turns on `--review`, findings get comment views too.
 
 The PR visual section is unchanged: description only, at most two views,
 `apply()` as in §3.4, opener bit-identical. Reviewer and Author still must not
@@ -1392,8 +1409,8 @@ glab api "projects/:id/merge_requests/<IID>/discussions" --paginate
 |-------|--------------------|--------|
 | `CRITIQUE` | Asks for a change: bug, risk, missing test, naming, "why not X?", a `CHANGES_REQUESTED` review body | Decide FIX / REFUTE / DEFER in §5.2 |
 | `QUESTION` | Wants an answer, not a code change ("does this handle the empty case?") | Answer it in plain prose, mark `action=answered`, no commit |
-| `NOISE` | "LGTM", praise, emoji, CI status chatter, duplicated bot output | Count it, reply to nothing |
-| `ALREADY_HANDLED` | Thread is `isResolved`/`resolved`, or a later reply already carries a pr-autopilot action marker | Skip — never re-answer |
+| `NOISE` | "LGTM", praise, emoji, CI status chatter, duplicated bot output | Count it, reply to nothing — no comment view either |
+| `ALREADY_HANDLED` | Thread is `isResolved`/`resolved`, or a later reply already carries a pr-autopilot action marker | Skip — never re-answer, no second reply, no new view |
 
 **The Author's own past replies are state, not input.** A comment written by the
 account pr-autopilot runs under, whose body carries an
@@ -1502,9 +1519,12 @@ glab api -X POST \
 <!-- pr-autopilot:action=fixed sha=<commit_sha> -->"
 ```
 
-The reply body is `posted(reply, …)` (§0.4) — plain prose, humanized, then
-unslopped when `--unslop` is on — and MUST end with exactly one action marker
-alone on the last line (§0.3). Never unslop the marker:
+The reply body is `posted(reply, …)` (§0.4, §5.8) — plain prose, humanized,
+then unslopped when `--unslop` is on, then exactly one comment view when
+`--show-me` is on this run and `show-me` loaded — and MUST end with exactly
+one action marker alone on the last line (§0.3). Never unslop the marker
+or the view. A comment view is not a reason to reply to an already-handled
+thread or to NOISE:
 
 | Marker | Meaning |
 |--------|---------|
@@ -1676,8 +1696,10 @@ to say so on the PR — in this order:
    > [Post the comment] [Skip, just report it to me]
 
 3. **Only on an explicit yes, post it** as a top-level comment. Run the prose
-   through `posted(ci-triage, …)` (§0.4) — humanizer, then unslop if `--unslop`
-   is on. Keep the evidence lines, paths, SHAs, and the marker verbatim:
+   through `posted(ci-triage, …)` (§0.4, §5.8) — humanizer, then unslop if
+   `--unslop` is on, then exactly one comment view when `--show-me` is on
+   this run and `show-me` loaded. Keep the evidence lines, paths, SHAs, and
+   the marker verbatim:
 
    ```markdown
    **CI check `<check-name>` is failing for a reason outside this PR.**
@@ -1693,6 +1715,10 @@ to say so on the PR — in this order:
 
    <!-- pr-autopilot:ci-triage:<check-name> -->
    ```
+
+   When `--show-me` is on this run and `show-me` loaded, the view sits between
+   the prose and that marker. When `--show-me` is off, or the skill is missing,
+   the body stays prose + marker. Never HTML.
 
    Record `ci_triage_comment: posted`. A "no" records `declined` and posts nothing.
 
@@ -1760,9 +1786,16 @@ every comment on the PR, (B) address the findings, (C) merge conflicts, (D) CI.
 (A), (C) and (D) always run this round — including when the Reviewer just approved
 and there is nothing to fix. A quiet pass still records `conflict: none` and
 `ci: green` or `not-run`. Do not edit the PR description. The orchestrator owns
-the PR visual section.
-Do not add a comment view to a reply or to a CI triage comment. Finding comment
-views (when show_me is true) are already on the Reviewer comments.
+the PR visual section. Never write `## What this PR does` or the section opener.
+When show_me is true this run, each unreplied reply and each posted CI triage
+comment gets exactly one comment view (mermaid / file tree / call tree /
+markdown diff, never HTML) between the prose and the marker. When show_me is
+false, replies stay prose-only. Load `show-me` when the bit is on, for replies
+and CI triage only. Finding comment views (when show_me is true) are already
+on the Reviewer comments; do not write those.
+A thread that already carries a pr-autopilot action marker, or an old status
+tag (✅ FIXED / 🛑 REFUTED / ⏸ DEFERRED / 🤷 SKIPPED / 💬 ANSWERED), stays
+unanswered — no second reply, no new view. NOISE stays without a reply.
 
 GOLDEN RULE — never silently change a business rule.
 Before you act on a comment, resolve a conflict, or write a CI fix that would alter
@@ -1801,7 +1834,13 @@ If Unslop is on and loaded, write in Soul login's first person using Soul sample
 No sample → first person, no invented pastiche. If Unslop is on but missing, do
 not fake it — post the humanizer output. If Unslop is off, skip it.
 Never unslop markers, mermaid fences, file trees, call trees, markdown diffs,
-paths, SHAs, or command lines.
+paths, SHAs, or command lines. Comment views stay exactly as drafted.
+If show_me is true: load `show-me` (Skill tool, skill: "show-me") for **one
+comment view per unreplied reply and per posted CI triage comment** from
+{mermaid, file tree, call tree, markdown diff}. Never HTML. Put the view after
+the prose, before the marker. Never two views. If it cannot load, write prose
++ marker only — do not invent a view, do not emit HTML. The orchestrator will
+alert and print the install line. If show_me is false, omit the view.
 
 NEVER STAMP A STATUS. No reply opens with ✅ FIXED / 🛑 REFUTED / ⏸ DEFERRED /
 🤷 SKIPPED / 💬 ANSWERED or any label of that shape — that is the loudest signal a
@@ -1889,7 +1928,8 @@ Per finding, in order:
      fix(JIRA-XXX): Address review iter-<N> — <brief>
    Capture the resulting commit SHA.
 3. Post an inline REPLY on the corresponding comment. Plain prose through
-   `posted(reply, …)` (humanizer, then unslop if Unslop is on), with the action
+   `posted(reply, …)` (humanizer, then unslop if Unslop is on, then exactly one
+   comment view if show_me is true and `show-me` loaded), with the action
    marker alone on the last line — no status stamp, no emoji opener:
      GitHub (inline comment):
        gh api -X POST repos/<SLUG>/pulls/<PR_NUMBER>/comments/<comment_id>/replies \
@@ -1907,9 +1947,13 @@ Per finding, in order:
    read the body from a file: `-F body=@reply.md`.
 
    Draft the sentence, run it through `humanizer`, then `unslop` if Unslop is on
-   and loaded, then append the marker verbatim (never humanize or unslop the
-   marker, the SHA or a code snippet). If Unslop is on but missing, skip it —
-   do not fake the pass. Examples of the sentence:
+   and loaded, then — if show_me is true and `show-me` loaded — exactly one
+   comment view, then append the marker verbatim (never humanize or unslop the
+   marker, the SHA, a code snippet, or the view). If Unslop is on but missing,
+   skip it — do not fake the pass. If show_me is true but `show-me` is missing,
+   omit the view — do not invent one, do not emit HTML. If show_me is false,
+   omit the view. Do not reply (and do not add a view) to an already-handled
+   thread or to NOISE. Examples of the sentence:
      fixed    → "Good catch. Swapped the header check for session.isAdmin in abc1234."
      refuted  → "This is already covered: parseLimit clamps to 100 on line 34, so
                  the unbounded case never reaches here."
@@ -1990,9 +2034,13 @@ D3. `external` → DO NOT PATCH AROUND IT. Never weaken a check, pin a dependenc
        explicit yes.
     c) ON YES — post it as a top-level comment via `posted(ci-triage, …)`:
        prose through `humanizer` then `unslop` if Unslop is on and loaded;
-       evidence lines, paths, SHAs and marker verbatim, ending with:
+       if show_me is true and `show-me` loaded, exactly one comment view
+       between prose and marker; evidence lines, paths, SHAs and marker
+       verbatim, ending with:
          <!-- pr-autopilot:ci-triage:<check-name> -->
        If Unslop is on but missing, post the humanizer output — do not fake it.
+       If show_me is true but `show-me` is missing, omit the view — do not
+       invent one, do not emit HTML. If show_me is false, omit the view.
        Record `ci_triage_comment: posted`. A "no" records `declined`.
     d) IF Interactive=no — do NOT post. Record `ci: escalated`,
        `ci_triage_comment: not-asked`, and put the full diagnosis plus the drafted
@@ -2099,6 +2147,116 @@ verification: pass | fail | partial
   - Otherwise go to **Phase 5**. A quiet Author pass after `APPROVED` (`conflict: none`, `CI: green` or `not-run`, no push) does not re-enter Phase 2. A `--resolve`-only run (no `--review`) always continues to Phase 5 after a successful Author round.
 - After `MAX_ITERATIONS` cycles still not APPROVED (or CI still red) → escalate: print summary of remaining BLOCKERs / red checks and ask user how to proceed (extend iterations / abort). Never force a merge past a guardrail.
 
+### 5.8 Comment views on replies and CI triage (`--show-me --resolve`)
+
+A **comment view** on an Author reply or a posted CI triage comment is the same
+show-me view as on a Reviewer finding (§4.3). Same four shapes (mermaid, file
+tree, call tree, markdown diff). Never HTML. Not the PR visual section. One
+view per posted reply, in that reply's body. One view per posted CI triage
+comment. The marker stays alone on the last line.
+
+Skip the view when `--show-me` is off **or** `--resolve` is off. `--resolve`
+without `--show-me` stays prose-only. `--show-me` without `--resolve` still
+does not invent Author replies. `--auto` does not turn `--show-me` on;
+`--auto --show-me` does, and because `--auto` already turns on `--resolve`,
+unreplied replies and a posted CI triage comment get comment views too.
+
+The PR visual section is unchanged: description only, at most two views,
+`apply()` as in §3.4, opener bit-identical. The orchestrator owns it. The
+Author still must not rewrite the PR description — never write
+`## What this PR does` or the section opener. Regeneration after an Author
+push that changed the diff stays the orchestrator's job (§5.7).
+
+**Who writes the view.** The Author prompt includes this run's `--show-me`
+bit and, when it is on, loads `show-me` to pick one view per unreplied reply
+and per posted CI triage comment. The Author posts through `posted(reply, …)`
+and `posted(ci-triage, …)` (§0.4). Finding comment views stay on the Reviewer
+comments (§4.3); the Author does not write those.
+
+**When not to reply.** A thread that already carries a pr-autopilot action
+marker (or an old status-tag reply: ✅ FIXED / 🛑 REFUTED / ⏸ DEFERRED /
+🤷 SKIPPED / 💬 ANSWERED) stays unanswered — no second reply, no new view.
+NOISE stays without a reply. A comment view is not a reason to answer either.
+
+**Missing `show-me` skill.** If `--show-me` is on and the Skill tool cannot
+load `show-me`: print an alert that names `show-me` and the install line
+`npx skills add FelipeOFF/skills --skill=show-me` (once per run, same alert
+as §3.4 / §4.3). Do not emit HTML. Do not silently invent comment views.
+Post the reply or CI triage as prose + marker. Continue the rest of the
+pipeline. The PR visual section still uses the condensed fallback in §3.4.
+
+**`posted(reply) → body`** and **`posted(ci-triage) → body`** — this is the
+seam. Done means the examples below hold.
+
+```
+on(posted_reply)   # same for posted_ci_triage
+  prose = humanizer(draft)
+  if --unslop and unslop skill loaded this run
+    prose = unslop(prose, soul)
+  if --show-me and --resolve and show-me skill loaded this run
+    view = exactly one of {mermaid, file tree, call tree, markdown diff}
+  else
+    view = none
+  body = prose
+         + (blank line + view if any)
+         + marker alone on last line
+  never HTML
+  never rewrite marker, fences, trees, diffs, paths, SHAs
+  if a draft carries more than one view, keep the first, drop the rest
+  never rewrite the PR description
+```
+
+Format of a view (same as §3.4 / §4.3, one of):
+
+- mermaid → a fenced block with language `mermaid` (flowchart or sequence)
+- file tree → indented tree; every path in backticks
+- call tree → indented calls; paths in backticks
+- markdown diff → a fenced block with language `diff`
+
+File paths in every view go in backticks. Pick the smallest view that makes
+*this* reply or triage clear — a swapped session guard is a three-line call
+tree, not a map of the repo.
+
+**Examples (completion criterion for posted):**
+
+1. `--show-me --resolve`, unreplied thread → reply is humanized (then unslopped if `--unslop`) + exactly one of the four views + marker last line.
+2. `--resolve` without `--show-me` → reply is prose + marker, no view.
+3. Already-handled thread (action marker or old ✅/🛑/⏸/🤷/💬 tag) → no second reply, no new view.
+4. NOISE → no reply.
+5. Posted CI triage under `--show-me` → exactly one view, `<!-- pr-autopilot:ci-triage:<check-name> -->` last line.
+6. `--show-me` on, skill missing → alert + npx; reply/CI posted without view, no HTML.
+7. Author never writes `## What this PR does` / section opener.
+
+Posted shape when `--show-me --resolve` and the skill loaded:
+
+```markdown
+Good catch. Swapped the header check for `session.isAdmin` in abc1234.
+
+checkout
+  requireAdmin
+    session.isAdmin
+
+<!-- pr-autopilot:action=fixed sha=abc1234 -->
+```
+
+Without `--show-me`, that same reply is the prose and the marker, nothing in
+between.
+
+Posted CI triage under `--show-me` (skill loaded):
+
+```markdown
+**CI check `e2e` is failing for a reason outside this PR.**
+
+The same job fails on `main` at 77f2a1c. Nothing in this PR's diff is
+touched by the failing step.
+
+e2e
+  checkout
+    npm test
+
+<!-- pr-autopilot:ci-triage:e2e -->
+```
+
 ---
 
 ## 6. Phase 5 — CI Polling
@@ -2186,7 +2344,9 @@ Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `sta
 | `--unslop` and `unslop` skill missing | Alert that names `unslop` and `npx skills add https://github.com/cursor/plugins --skill=unslop`. Do not fake the pass. Continue; posted prose stays humanizer-only |
 | `--show-me --review` | Each Reviewer finding (code + test track) gets exactly one comment view (§4.3). Marker last line. PR visual section unchanged |
 | `--review` without `--show-me` | Findings stay prose-only. No comment view |
-| `--show-me` without `--review` | PR visual section only. No new review, no comment views |
+| `--show-me` without `--review` and without `--resolve` | PR visual section only. No new review, no comment views |
+| `--show-me --resolve` | Each unreplied reply gets exactly one comment view; a posted CI triage comment gets exactly one (§5.8). Marker last line. Already-handled threads (action marker or old status tag): no second reply, no new view. NOISE: no reply. Author does not write the PR visual section |
+| `--resolve` without `--show-me` | Replies stay prose-only. No comment view |
 | `--show-me` Author round with no push or unchanged diff | Leave the description alone |
 | `--resolve` / `--auto` without `--show-me` | Never write a PR visual section. Never write a comment view |
 | `--auto` without `--unslop` | Never run the unslop pass |
@@ -2297,11 +2457,14 @@ pr-autopilot --show-me
 # Briefing on the description, plus one comment view on each Reviewer finding
 pr-autopilot --show-me --review
 
-# Briefing on create, regenerate after Author fixes that change the diff
+# Briefing on create; one comment view on each unreplied reply and on a
+# posted CI triage comment; regenerate the section after Author fixes that
+# change the diff
 pr-autopilot --show-me --resolve
 
-# Full hands-off plus the briefing (and comment views on findings, because
-# --auto already turns on --review)
+# Full hands-off plus the briefing (and comment views on findings, unreplied
+# replies, and a posted CI triage comment, because --auto already turns on
+# --review and --resolve)
 pr-autopilot --auto --show-me
 
 # Second prose pass after humanizer (--auto does not imply this)

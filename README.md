@@ -48,7 +48,7 @@ Stages ②–⑥ are opt-in. With no flags the run ends after ①.
 
 - **Opt-in stages** — every flag defaults to `false`. Bare `pr-autopilot` opens the PR and stops; you turn on review, resolve, and merge as you need them.
 - **Auto title + body** from commits and diff, following Conventional Commits + Jira.
-- **`--show-me` reviewer briefing** — opt-in. Appends a `## What this PR does` section to the PR description (mermaid / file tree / call tree / markdown diff, never HTML) so a human reviewer can read the change, the trade-off, and the alternative that did not ship before the diff. Combined with `--review`, every Reviewer finding also gets one **comment view** of the same four shapes, on the same line as the finding; the severity marker stays last. `--auto` does not turn this on. A second run replaces the section instead of duplicating it. With `--resolve`, the section regenerates after an Author push that actually changed the diff.
+- **`--show-me` reviewer briefing** — opt-in. Appends a `## What this PR does` section to the PR description (mermaid / file tree / call tree / markdown diff, never HTML) so a human reviewer can read the change, the trade-off, and the alternative that did not ship before the diff. Combined with `--review`, every Reviewer finding also gets one **comment view** of the same four shapes, on the same line as the finding; the severity marker stays last. Combined with `--resolve`, every Author reply on a thread that still has no reply, and a posted CI triage comment, also get exactly one comment view; already-handled threads and NOISE stay unanswered. `--auto` does not turn this on. A second run replaces the section instead of duplicating it. With `--resolve`, the section regenerates after an Author push that actually changed the diff. The Author does not write the PR visual section.
 - **Multi-agent review loop** with structured findings: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Writes like a person, codes like a lazy senior** — every word posted to the PR goes through [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) and every line of code through [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). No `✅ FIXED` stamps, no `[BLOCKER]` brackets, no emoji openers: comments read like a teammate wrote them, and the machine state rides in an invisible HTML marker. Both skills are also restated inside the skill, so a bare harness without them behaves the same.
 - **`--unslop` second prose pass** — opt-in. After humanizer, posted natural-language (generated title and body, Reviewer findings, Author replies, a posted CI triage comment) goes through [`unslop`](https://github.com/cursor/plugins/tree/main/pstack/skills/unslop) in the invoker's voice: the GitHub or GitLab account of this run, sampled from comments that account already left on this repo. No sample → first person, no voice file. `--auto` does not turn this on. If the skill is missing, the run alerts with `npx skills add https://github.com/cursor/plugins --skill=unslop` and continues humanizer-only — it never fakes the pass.
@@ -218,7 +218,9 @@ From any branch with commits to ship:
 # Briefing on the description, plus one comment view on each Reviewer finding
 /pr-autopilot --show-me --review
 
-# Briefing on create; regenerate after Author fixes that change the diff
+# Briefing on create; one comment view on each unreplied reply and on a
+# posted CI triage comment; regenerate the section after Author fixes that
+# change the diff
 /pr-autopilot --show-me --resolve
 
 # Second prose pass after humanizer (--auto does not imply this)
@@ -248,7 +250,7 @@ Every boolean flag defaults to `false` — pass it (bare, or `=true`) to turn th
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
 | `--base` | auto | Target branch |
 | `--draft` | `false` | Open as draft (forces no merge) |
-| `--show-me` | `false` | Append (or replace) a reviewer briefing on the PR description. Combined with `--review`, also puts one comment view on each Reviewer finding. Not implied by `--auto`. |
+| `--show-me` | `false` | Append (or replace) a reviewer briefing on the PR description. Combined with `--review`, also puts one comment view on each Reviewer finding. Combined with `--resolve`, also puts one comment view on each unreplied Author reply and on a posted CI triage comment. Not implied by `--auto`. |
 | `--unslop` | `false` | After humanizer, run posted prose through unslop in the invoker's voice. Not implied by `--auto`. |
 | `--ci-timeout` | `1800` | Seconds before bailing on CI |
 | `--ci-poll-interval` | `30` | Seconds between polls |
@@ -261,7 +263,7 @@ The Reviewer **never** posts a single bulk PR comment. Every finding is posted a
 <!-- pr-autopilot:severity=blocker -->
 ```
 
-The Author replies on each inline comment in plain language, and closes the reply with the action marker:
+The Author replies on each inline comment in plain language, and closes the reply with the action marker. With `--show-me --resolve`, each reply on a thread that still has no reply, and a posted CI triage comment, also carry exactly one comment view above the marker. Without `--show-me`, replies stay prose-only. A thread that already has an action marker (or an old status-tag reply) is left unanswered — no second reply, no new view. NOISE stays without a reply. The Author does not write the PR visual section.
 
 ```html
 <!-- pr-autopilot:action=fixed sha=abc1234 -->   code was changed
