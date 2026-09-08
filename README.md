@@ -48,7 +48,7 @@ Stages ②–⑥ are opt-in. With no flags the run ends after ①.
 
 - **Opt-in stages** — every flag defaults to `false`. Bare `pr-autopilot` opens the PR and stops; you turn on review, resolve, and merge as you need them.
 - **Auto title + body** from commits and diff, following Conventional Commits + Jira.
-- **`--show-me` reviewer briefing** — opt-in. Appends a `## What this PR does` section to the PR description (mermaid / file tree / call tree / markdown diff, never HTML) so a human reviewer can read the change, the trade-off, and the alternative that did not ship before the diff. `--auto` does not turn this on. A second run replaces the section instead of duplicating it. With `--resolve`, the section regenerates after an Author push that actually changed the diff.
+- **`--show-me` reviewer briefing** — opt-in. Appends a `## What this PR does` section to the PR description (mermaid / file tree / call tree / markdown diff, never HTML) so a human reviewer can read the change, the trade-off, and the alternative that did not ship before the diff. Combined with `--review`, every Reviewer finding also gets one **comment view** of the same four shapes, on the same line as the finding; the severity marker stays last. `--auto` does not turn this on. A second run replaces the section instead of duplicating it. With `--resolve`, the section regenerates after an Author push that actually changed the diff.
 - **Multi-agent review loop** with structured findings: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Writes like a person, codes like a lazy senior** — every word posted to the PR goes through [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) and every line of code through [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). No `✅ FIXED` stamps, no `[BLOCKER]` brackets, no emoji openers: comments read like a teammate wrote them, and the machine state rides in an invisible HTML marker. Both skills are also restated inside the skill, so a bare harness without them behaves the same.
 - **Reviews for over-engineering, not just bugs** — the Reviewer carries the ponytail lens: an abstraction with one caller, a dependency added for three lines, a helper reimplemented when the repo already has one. "Delete this" is a valid finding.
@@ -213,6 +213,9 @@ From any branch with commits to ship:
 # Reviewer briefing on the PR description (--auto does not imply this)
 /pr-autopilot --show-me
 
+# Briefing on the description, plus one comment view on each Reviewer finding
+/pr-autopilot --show-me --review
+
 # Briefing on create; regenerate after Author fixes that change the diff
 /pr-autopilot --show-me --resolve
 ```
@@ -231,13 +234,13 @@ Every boolean flag defaults to `false` — pass it (bare, or `=true`) to turn th
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
 | `--base` | auto | Target branch |
 | `--draft` | `false` | Open as draft (forces no merge) |
-| `--show-me` | `false` | Append (or replace) a reviewer briefing on the PR description. Not implied by `--auto`. |
+| `--show-me` | `false` | Append (or replace) a reviewer briefing on the PR description. Combined with `--review`, also puts one comment view on each Reviewer finding. Not implied by `--auto`. |
 | `--ci-timeout` | `1800` | Seconds before bailing on CI |
 | `--ci-poll-interval` | `30` | Seconds between polls |
 
 ### Inline review & inline replies
 
-The Reviewer **never** posts a single bulk PR comment. Every finding is posted as an inline comment on the exact file + line. It opens with the words a reviewer says out loud — `Blocking:`, `Suggestion:`, `nit:` — and closes with an invisible marker that carries the severity for the pipeline:
+The Reviewer **never** posts a single bulk PR comment. Every finding is posted as an inline comment on the exact file + line. It opens with the words a reviewer says out loud — `Blocking:`, `Suggestion:`, `nit:` — and closes with an invisible marker that carries the severity for the pipeline. With `--show-me --review`, that same comment also carries exactly one **comment view** (mermaid / file tree / call tree / markdown diff, never HTML) above the marker. Without `--show-me`, findings stay prose-only.
 
 ```html
 <!-- pr-autopilot:severity=blocker -->
