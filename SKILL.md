@@ -1,6 +1,6 @@
 ---
 name: pr-autopilot
-description: Orchestrates the full lifecycle of a Pull Request — creation, multi-agent code review, triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
+description: Orchestrates the full lifecycle of a Pull Request — creation, two-track multi-agent code review (deep maintainability audit for code judo + test-value assessment when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
 argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
 ---
 
@@ -9,6 +9,8 @@ argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--draft] 
 End-to-end PR pipeline: **create → (review → respond → re-review loop) → triage every comment on the PR → resolve conflicts & fix CI → wait for CI → merge**.
 
 **Everything past PR creation is opt-in.** Every boolean flag defaults to `false`. With no flags the skill creates the PR and stops. You switch on each stage explicitly (`--review`, `--resolve`, `--merge`) or turn them all on at once with `--auto`.
+
+**Phase 2 review runs two parallel tracks** when `--review` or `--auto` is set: (A) a **code track** that runs a deep maintainability audit for code judo, abstraction quality, file size, spaghetti growth, and structural simplification (the approval bar), and (B) a **test track** that evaluates tests in the PR diff by value and identifies removal candidates (tautologies, always-green, unjustified cost). Both tracks' findings are merged into one `review-report.md` and posted as one review on the PR. The test track only runs when the PR diff contains test files; otherwise it is skipped and only the code track runs.
 
 This skill is **rigid**. Follow the phases in order. Do not skip the verification gates between phases. Coordinate subagents via the `Task` tool (or `Agent` tool depending on harness). Persist intermediate artifacts to `.pr-autopilot/<pr-number>/` so iterations and re-runs are recoverable.
 
@@ -31,7 +33,7 @@ Invoke them with the `Skill` tool — `skill: "humanizer"`, `skill: "ponytail"`,
 the plain name first and fall back. **If a skill is not installed, the rules in
 §0.1, §0.2 and §3.4 still bind.** They are the part of each skill this pipeline
 depends on, written out so an agent in a bare harness behaves the same way.
-Subagent prompt templates (§4.2, §5.6) carry their own copy of house style for
+Subagent prompt templates (§4.5, §5.6) carry their own copy of house style for
 the same reason — a subagent is stateless and never reads this file. The
 orchestrator owns the PR visual section; Reviewer and Author do not write it.
 
@@ -248,8 +250,13 @@ create the PR and stop.
 │  Phase 1: Preflight + PR Creation                               │
 │      │                                                          │
 │      ▼                                                          │
-│  Phase 2: Reviewer subagent (Task)  ──► review-report.md        │
-│      │     (skipped when --resolve runs without --review)       │
+│  Phase 2: Two parallel tracks (skipped when --resolve w/o       │
+│      │    --review):                                            │
+│      │    A) Code track (Task)  ──► review-report.md            │
+│      │    B) Test track (2 ranker Tasks + 1 consolidator) ──►   │
+│      │       test-ranker-a.md, test-ranker-b.md,                │
+│      │       test-consolidated.md                               │
+│      │    Orchestrator merges findings → posts one review       │
 │      ▼                                                          │
 │  Phase 3: Author subagent (Task)    ──► pr-feedback.md          │
 │      │     triages EVERY comment on the PR — human and bot ──►  │
@@ -517,13 +524,190 @@ Route by the flags that are on (`--auto` implies `--review`, `--resolve` and
 
 ---
 
-## 4. Phase 2 — Reviewer Subagent (inline comments)
+## 4. Phase 2 — Two-Track Review: Maintainability + Test Value
 
-Spawn one subagent per iteration. Use the `Task` tool with `subagent_type: "general-purpose"` (or `code-reviewer` if available in the harness).
+Phase 2 runs **two parallel tracks** that feed into one consolidated review:
+
+1. **Code track** — deep maintainability audit of the PR diff for code judo, abstraction quality, file size, spaghetti growth, and structural simplification. This is the approval bar. Few high-conviction comments; do not flood nits.
+2. **Test track** — test-value assessment: two independent rankers evaluate tests in the PR diff by value, followed by a consolidator that produces a final removal/justification plan
+
+Both tracks post their findings as inline comments on the exact file + line they refer to, and the orchestrator merges them into a single `review-report.md` and a single posted GitHub/GitLab review.
 
 **Hard requirement:** every finding must be posted as an **inline comment on the exact line of code** it refers to. A standalone PR comment (not anchored to a line) is **not** an acceptable output, except for the top-level review summary.
 
-### 4.1 How to post inline comments
+### 4.0 When to run the test nuke track
+
+The orchestrator first reads the PR diff to identify test files. Use common test-file patterns: `*test*.{js,ts,py,go,rb,java}`, `*_test.go`, `test_*.py`, `*Test.java`, `*Spec.{js,ts}`, files under `__tests__/`, `tests/`, `spec/`, etc.
+
+- **If the PR diff contains at least one test file** → run both tracks in parallel.
+- **If the PR diff contains no test files** → run only the code review track, skip the test nuke track entirely, and record that in `review-report.md` (`test_nuke: skipped — no tests in diff`).
+
+Scoping: the test nuke track evaluates tests **in the PR diff** and tests they clearly depend on (e.g. shared test helpers imported by those tests). It does not require ranking the entire repo suite unless the PR is test-only and the diff is small (<200 lines of test code).
+
+### 4.1 Code track — deep maintainability audit
+
+Spawn one `Task` subagent with `subagent_type: "general-purpose"` (or `code-reviewer` if available). This replaces the old "correctness-only" reviewer with a deep maintainability audit. The prompt template in §4.5 applies here.
+
+**Composition**: The Reviewer MUST load the `thermo-nuclear-code-quality-review` skill via the Skill tool before auditing the diff (§4.5). That loaded skill IS the review standard: core prompt, rules 0–7, questions, flag list, remedies, tone, output priority, approval bar.
+
+**Install**: `npx skills add https://github.com/cursor/plugins --skill thermo-nuclear-code-quality-review` then `/reload-plugins` in Claude Code. [Catalog](https://www.skills.sh/cursor/plugins/thermo-nuclear-code-quality-review) | [Source](https://github.com/cursor/plugins/tree/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review)
+
+Upstream skill has `disable-model-invocation: true` (explicit ask required); inside pr-autopilot, `--review` / `--auto` IS that explicit ask. Do not run this on `--resolve`-only.
+
+**Fallback rules** (if the Skill tool cannot load the upstream skill):
+- Perform a deep code quality audit of the PR diff
+- Be ambitious about structural simplification; look for "code judo" moves that delete complexity
+- Do not let a PR push a file <1k → >1k lines without very strong reason
+- Do not allow random spaghetti growth (ad-hoc conditionals in unrelated flows)
+- Bias toward cleaning the design, not just accepting working code
+- Prefer direct, boring, maintainable code over hacky or magical
+- Push hard on type and boundary cleanliness
+- Keep logic in canonical layer, reuse existing helpers
+- Treat unnecessary sequential orchestration and non-atomic updates as design smells
+- Presumptive BLOCKERS: preserves complexity when code-judo would delete it; <1k → >1k lines; ad-hoc branching tangles flow; scatters feature checks; unnecessary abstraction/wrapper; duplicates helper or wrong layer
+- Approval bar: do NOT approve merely because behavior works
+- Few high-conviction comments; do not flood nits
+- Extra lens: Keep ponytail as additional anti-over-engineering check (loaded separately via Skill tool)
+
+The Reviewer reads the PR diff, applies the rules above, classifies each finding as BLOCKER/SUGGESTION/NITPICK, and writes `.pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md` with the list of findings. **Do not post the review to the PR yet** — the orchestrator will merge findings from both tracks before posting.
+
+### 4.2 Test track — test-value assessment
+
+This track runs in parallel with the code track, only when the PR diff contains test files (§4.0).
+
+**Step A — spawn two independent rankers**
+
+Launch two `Task` subagents **in parallel**, each isolated (no shared context), ideally with different models if the harness supports model selection per Task, else two separate Task invocations with `subagent_type: "general-purpose"`.
+
+Both receive **the same prompt**:
+
+```
+You are a test-quality ranker in the pr-autopilot pipeline.
+
+PR: <PR_URL>
+PR number: <PR_NUMBER>
+Iteration: <N>
+Repo root: <CWD>
+
+Your task:
+1. Read the PR diff: git diff <BASE>...<BRANCH>
+2. Identify every test file in the diff (test*.{js,ts,py,go}, *_test.go, test_*.py,
+   *Test.java, *Spec.{js,ts}, files under __tests__/, tests/, spec/, etc.)
+3. For each test in those files, and for tests they clearly depend on (e.g. shared
+   test helpers imported by the changed tests):
+   - What does this test assert?
+   - What value does it provide? (catches regressions, documents behavior, guards
+     edge cases, prevents data loss, etc.)
+   - What is the cost? (runtime, brittleness, false positives, maintenance burden)
+4. Stack-rank the tests by net value (value minus cost).
+5. Identify candidates for removal:
+   - Tests that assert tautologies (mocking the unit under test so nothing real is checked)
+   - Tests that are always-green no matter what the code does (flaky in the "never fails" sense)
+   - Tests that duplicate coverage another test already provides with less cost
+   - Tests with unjustified cost (slow, brittle, unclear intent)
+
+Output format:
+Write a markdown document with these sections:
+
+## High-value tests (keep)
+- `<file>:<line>` — `<test name>` — <why it is valuable, 1-2 sentences>
+
+## Medium-value tests
+- `<file>:<line>` — `<test name>` — <value vs cost tradeoff, 1-2 sentences>
+
+## Candidates for removal
+- `<file>:<line>` — `<test name>` — <why it should be removed, objective justification>
+
+## Summary
+<2-3 sentences on the overall test quality in this PR>
+
+Be specific. Cite line numbers. Every candidate for removal must carry an objective,
+technical justification — "low value" alone is not enough. A test that correctly
+asserts real behavior and catches real regressions is not a candidate, even if you
+think the code is simple.
+```
+
+Each ranker writes its output to a local file:
+- Ranker 1 → `.pr-autopilot/<PR_NUMBER>/iter-<N>/test-ranker-a.md`
+- Ranker 2 → `.pr-autopilot/<PR_NUMBER>/iter-<N>/test-ranker-b.md`
+
+The orchestrator waits for both rankers to complete before proceeding.
+
+**Step B — spawn the consolidator**
+
+Launch one `Task` subagent with `subagent_type: "general-purpose"`, with **no inherited review context** (isolated), given only the two ranker outputs:
+
+```
+You are the test-value consolidator in the pr-autopilot pipeline.
+
+PR: <PR_URL>
+PR number: <PR_NUMBER>
+Iteration: <N>
+Repo root: <CWD>
+
+Your inputs:
+- .pr-autopilot/<PR_NUMBER>/iter-<N>/test-ranker-a.md  (ranker 1)
+- .pr-autopilot/<PR_NUMBER>/iter-<N>/test-ranker-b.md  (ranker 2)
+
+Your task:
+1. Read both ranker reports.
+2. Compare their "candidates for removal" lists.
+3. For each test that EITHER ranker flagged:
+   - If both agree it should be removed, and the justification is objective and technical
+     (tautology, always-green, pure duplication, unjustified cost), include it in the
+     final removal list.
+   - If only one ranker flagged it, include it ONLY if that ranker's justification is
+     objective, specific, and technically sound. The other ranker's silence is not a veto.
+   - If both flagged it but with conflicting reasons, reconcile them or exclude it if the
+     justifications are too weak.
+4. For each test that survives (high-value or medium-value), check whether both rankers
+   agree. If one says "remove" and the other says "keep" with a strong justification for
+   keeping, exclude it from removals.
+5. Build one consolidated plan:
+
+## Consolidated removal candidates
+- `<file>:<line>` — `<test name>` — <consolidated justification, objective and specific>
+
+## Tests to keep (high confidence)
+- `<file>:<line>` — `<test name>` — <why both rankers agreed it is valuable>
+
+## Step-by-step changes
+For each removal candidate:
+1. `<file>:<line>` — Remove `<test name>` — <why>
+2. ...
+
+Every addition and removal must be justified objectively. "Low value" or "redundant"
+without citing the specific duplication or tautology is not sufficient. Missing
+justification is not a BLOCKER by itself — downgrade to SUGGESTION.
+
+Write your output to .pr-autopilot/<PR_NUMBER>/iter-<N>/test-consolidated.md
+```
+
+The consolidator writes `.pr-autopilot/<PR_NUMBER>/iter-<N>/test-consolidated.md`.
+
+**Step C — map to inline comments**
+
+The orchestrator reads `test-consolidated.md` and converts each removal candidate into an inline comment on the test file:
+
+- **Candidate for removal, strong justification (tautology / always-green / mocking the unit under test)** → `BLOCKER` severity, posted as an inline comment on the test's opening line.
+- **Candidate for removal, weaker justification (unjustified cost / unclear duplication)** → `SUGGESTION` severity.
+- **Missing justification** → `SUGGESTION` (not BLOCKER).
+
+The comment body follows the same format as code-review findings (§4.5): humanized prose, opens with `Blocking:` or `Suggestion:`, closes with `<!-- pr-autopilot:severity=blocker|suggestion -->`.
+
+Example:
+
+```markdown
+Blocking: this test mocks `calculateTotal` and asserts the mock's return value, so it never exercises the real calculation. It cannot catch regressions.
+
+<!-- pr-autopilot:severity=blocker -->
+```
+
+These test-track findings are added to the same `findings` array the code track produces, before the orchestrator posts the consolidated review in §4.6.
+
+### 4.4 How to post inline comments (both tracks)
+
+This section applies to both the code-review track and the test-nuke track. The orchestrator collects findings from both tracks and posts them in one GitHub/GitLab review.
 
 #### GitHub — single review with inline comments
 
@@ -577,11 +761,14 @@ glab api -X POST "projects/:id/merge_requests/<MR_IID>/discussions" \
 
 Repeat per finding. GitLab does not bundle them into a single review object.
 
-### 4.2 Reviewer prompt template
+### 4.5 Reviewer prompt template (code track — deep maintainability audit)
+
+This template is for the code-track subagent. The orchestrator will merge your findings with those from the test track (if it ran) before posting the review.
 
 ```
-You are the Reviewer agent in the pr-autopilot pipeline. You are stateless and have
-no prior context — everything you need is below.
+You are the Reviewer agent in the pr-autopilot pipeline (code track — deep
+maintainability audit). You are stateless and have no prior context — everything you
+need is below.
 
 PR: <PR_URL>
 Platform: <github|gitlab>
@@ -593,51 +780,66 @@ Head SHA: <HEAD_SHA>
 Iteration: <N> of <MAX>
 Repo root: <CWD>
 
-LOAD YOUR TWO SKILLS FIRST
-- `ponytail` (Skill tool, skill: "ponytail", falling back to "ponytail:ponytail")
-  before you read the diff. It is the lens of this review: the best code is the code
-  that was never written. Every fix you suggest is the laziest version that works.
-- `humanizer` (Skill tool, skill: "humanizer") before you post anything. It owns
-  every word of prose you write.
-If either is unavailable in your harness, the HOUSE STYLE block below is the part of
-them this pipeline depends on — apply it by hand.
+LOAD YOUR THREE SKILLS FIRST (in this order)
+1. `thermo-nuclear-code-quality-review` (Skill tool, skill: "thermo-nuclear-code-quality-review")
+   BEFORE reading the diff. This IS the review standard: core prompt, rules 0–7,
+   questions, flag list, remedies, tone, output priority, approval bar. If unavailable,
+   fall back to the condensed FALLBACK RULES below.
+2. `ponytail` (Skill tool, skill: "ponytail", falling back to "ponytail:ponytail")
+   as an extra anti-over-engineering check AFTER the maintainability audit. Does this
+   need to exist at all? Does the repo already have it? stdlib? native platform?
+   installed dependency? one line?
+3. `humanizer` (Skill tool, skill: "humanizer") before you post anything. It owns
+   every word of prose you write. The maintainability audit is direct and demanding;
+   humanizer strips AI tells but keeps the directness.
+
+If any skill is unavailable in your harness, the FALLBACK RULES and HOUSE STYLE blocks
+below carry the condensed version — apply those by hand.
 
 YOUR TASK
 1. Read the full diff: git diff <BASE>...<BRANCH>
 2. Read the changed files in their current state.
-3. Evaluate against:
-   - Correctness and edge cases
-   - Security (injection, secret leakage, authz bypass, OWASP-class)
-   - Performance (N+1, unbounded loops, blocking I/O on hot paths)
-   - Code quality (naming, dead code, missing error paths at trust boundaries)
-   - Over-engineering, the ponytail lens: an abstraction with one caller, a new
-     dependency for what a few lines do, config for a value that never changes,
-     a helper reimplemented when the repo already has one two files over,
-     scaffolding built "for later", a wrapper that only forwards arguments.
-     Deleting code is a valid finding. So is "this whole file did not need to exist".
-   - Consistency with surrounding codebase patterns
-   - Test coverage proportional to risk
+3. Apply the `thermo-nuclear-code-quality-review` skill you loaded above. It defines
+   the review standard: core prompt, rules 0–7, questions, flag list, remedies, tone,
+   output priority, approval bar.
+4. Apply the `ponytail` lens as an extra anti-over-engineering check.
 
 CLASSIFICATION
 Each finding is exactly one of:
-  BLOCKER    — must be fixed before merge
-  SUGGESTION — should likely be fixed
+  BLOCKER    — presumptive blocker from the loaded skill, or major structural regression
+  SUGGESTION — should likely be fixed, but not a blocker
   NITPICK    — optional/aesthetic
 
-POSTING THE REVIEW (mandatory inline format)
-You MUST post each finding as an INLINE comment anchored to the exact file +
-line number. Do NOT post a single bulk comment with all findings.
+FALLBACK RULES (use ONLY if the skill failed to load)
+If `thermo-nuclear-code-quality-review` is unavailable:
+- Perform deep code quality audit; be ambitious about structural simplification
+- Look for "code judo" moves that delete complexity rather than rearrange it
+- Do not let PR push file <1k → >1k lines without very strong reason
+- Do not allow random spaghetti growth (ad-hoc conditionals in unrelated flows)
+- Bias toward cleaning design, not just accepting working code
+- Prefer direct, boring, maintainable over hacky or magical
+- Push hard on type and boundary cleanliness
+- Keep logic in canonical layer, reuse existing helpers
+- Treat unnecessary sequential orchestration and non-atomic updates as design smells
+- Presumptive BLOCKERS: preserves complexity when code-judo would delete it; <1k → >1k
+  lines; ad-hoc branching tangles flow; scatters feature checks; unnecessary
+  abstraction/wrapper; duplicates helper or wrong layer
+- Approval bar: do NOT approve merely because behavior works
+- Few high-conviction comments; do not flood nits
 
-GitHub:
-  Build the full list of inline comments and submit them in ONE review via
-  `gh api -X POST repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews` with the
-  `comments[]` array. Use event=REQUEST_CHANGES if any BLOCKER, otherwise
-  event=COMMENT.
+FINDINGS FORMAT (do NOT post the review to the PR yet)
+You MUST format each finding as an INLINE comment anchored to the exact file +
+line number, but write them to the local artifact only. The orchestrator will merge
+your findings with the test-nuke track (if it ran) and post one consolidated review.
 
-GitLab:
-  POST one discussion per finding via
-  `glab api projects/:id/merge_requests/<iid>/discussions` with a `position`
-  block (base_sha, head_sha, start_sha, new_path, new_line).
+Structure each finding with:
+- path (file path)
+- line (or start_line + line for multi-line)
+- side ("RIGHT" for added/modified, "LEFT" for removed-only context)
+- body (humanized prose + severity marker)
+
+The orchestrator will use this structure to build the GitHub `comments[]` array or
+the GitLab discussion position blocks.
 
 COMMENT FORMAT — write like a reviewer, not like a form
 Never open a comment with `[BLOCKER]`, `[SUGGESTION]`, `[NITPICK]` or a status
@@ -695,55 +897,95 @@ Do not apply the lazy lens to input validation at trust boundaries, error handli
 that prevents data loss, security, or accessibility — those get flagged when they
 are missing, never simplified away.
 
-OUTPUT (also write a local artifact)
+OUTPUT (write local artifact only, do NOT post to PR)
 Write .pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md with this exact
-front-matter and a list of every finding INCLUDING the comment_id returned
-by the API for each one (you'll need them in the response phase):
+front-matter and a list of every finding in a structured format the orchestrator
+can merge with test-nuke findings:
 
 ---
 verdict: APPROVED | CHANGES_REQUESTED
 blocker_count: <int>
 suggestion_count: <int>
 nitpick_count: <int>
-review_id: <id returned by GitHub review POST, or "n/a" for GitLab>
+track: code-review
 ---
 
 # Review — iteration <N>
 
 ## Summary
-<2–4 sentences — same content as the top-level review body posted to the PR>
+<2–4 sentences — this will become the top-level review body after merging tracks>
 
 ## Inline findings
 
 ### [BLOCKER] <title>
-- File: `path/to/file.ts:42`
-- comment_id: <id from API response>
-- url: <html_url from response>
-- Problem: ...
-- Suggested fix: ...
+- path: `src/file.ts`
+- line: 42
+- side: RIGHT
+- body: |
+  Blocking: the /admin/users handler trusts the X-User header without checking it,
+  so anyone can set that header and read the admin list.
 
-(The uppercase severity is local machine state. It is what you write in this file,
-never what you post on the PR.)
+  The rest of the handlers already use the session guard:
 
-(repeat per finding, in posting order)
+  ```ts
+  if (!req.session?.isAdmin) return res.status(403).end();
+  ```
+
+  <!-- pr-autopilot:severity=blocker -->
+
+(The uppercase severity label is local machine state, never posted. The body's
+trailing marker is what the orchestrator and the Author parse.)
+
+(repeat per finding)
 
 ## Verdict
 APPROVED  (only if blocker_count == 0)
 or CHANGES_REQUESTED
 
-Be specific. Do not write speculative findings.
+Be specific. Do not write speculative findings. The orchestrator will merge this
+with test-nuke findings (if any) and post one consolidated GitHub/GitLab review.
 ```
 
-### 4.3 Orchestrator post-processing
+### 4.6 Orchestrator — merge tracks and post one review
 
-After the Reviewer returns, parse the front-matter of `review-report.md`:
+After both tracks complete (or after the code track alone when no tests are in the diff), the orchestrator:
+
+1. **Read the code-track artifact**: `.pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md`
+2. **Read the test-track artifact** (if it ran): `.pr-autopilot/<PR_NUMBER>/iter-<N>/test-consolidated.md`
+3. **Parse findings from both**:
+   - Code-track findings are already structured with `path`, `line`, `side`, `body` in `review-report.md`
+   - Test-track findings are in `test-consolidated.md` under "Consolidated removal candidates" — convert each to the same structure:
+     - Extract `file:line` from the bullet (`src/foo.test.ts:42`)
+     - `path` = `src/foo.test.ts`
+     - `line` = `42`
+     - `side` = `RIGHT` (tests are always in the new side of the diff)
+     - `body` = humanized prose (run the justification through `humanizer`) + severity marker
+     - Severity: tautology / always-green / mocking-the-unit = `blocker`, weaker justifications = `suggestion`
+4. **Deduplicate**: if both tracks flagged the same line (rare), keep the BLOCKER if either is a BLOCKER, else merge the prose.
+5. **Update the front-matter** of `review-report.md`:
+   - Recalculate `blocker_count`, `suggestion_count`, `nitpick_count` across both tracks
+   - Set `verdict: CHANGES_REQUESTED` if any BLOCKER, else `APPROVED`
+   - Add `test_track: ran` or `test_track: skipped — no tests in diff`
+6. **Append test-track findings** to the "## Inline findings" section of `review-report.md`, preserving the structured format.
+7. **Post the consolidated review** to GitHub/GitLab using the merged findings array:
+   - GitHub: one `gh api -X POST repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews` with all `comments[]` from both tracks, `event=REQUEST_CHANGES` if any BLOCKER, else `COMMENT`
+   - GitLab: one `glab api POST` per finding (GitLab doesn't batch them)
+8. **Record `comment_id` and `url`** for each posted finding back into `review-report.md` (the Author needs them in Phase 3).
+
+The result: one `review-report.md` with findings from both tracks, and one posted review on the PR with inline comments on code files (from the code-review track) and test files (from the test-nuke track).
+
+### 4.7 Orchestrator post-processing
+
+After both tracks complete and the consolidated review is posted (§4.6), parse the merged front-matter of `review-report.md`:
 
 - `verdict: APPROVED` and `blocker_count: 0`:
   - `--resolve`/`--merge`/`--auto` on → jump to **Phase 5** (CI). Under `--resolve`/`--auto`, a red check loops back to the Author to fix it; once every check is green, Phase 6 merges only if `--merge`/`--auto`, otherwise STOP.
   - review only (none of `--resolve`/`--merge`/`--auto`) → STOP. Print the PR URL and exit (review passed, nothing else requested).
 - `verdict: CHANGES_REQUESTED` and `--resolve` off → STOP (mode "PR + review"). Print the PR URL and exit.
 - `verdict: CHANGES_REQUESTED` and `--resolve` on → proceed to **Phase 3**.
-- Malformed front-matter, or any finding without a `comment_id` → re-spawn Reviewer once with explicit format reminder; on second failure, escalate to user.
+- Malformed front-matter, or any finding without a `comment_id` → re-spawn tracks once with explicit format reminder; on second failure, escalate to user.
+
+The `blocker_count`, `suggestion_count`, and `nitpick_count` in the front-matter now reflect the sum of findings from both the code track and the test track (when it ran). The Author in Phase 3 works the merged `review-report.md` the same way it always has — it sees no difference between a finding from the code track and one from the test track.
 
 ---
 
@@ -1582,10 +1824,17 @@ Layout under `.pr-autopilot/<PR_NUMBER>/`:
 ```
 state.json                       # {iteration, status, pr_url, platform, started_at, show_me, head_sha}
 pr-visual.md                     # last applied PR visual section (absent when --show-me is off)
-iter-1/review-report.md          # absent when --resolve runs without --review
+iter-1/review-report.md          # merged findings from code + test tracks
+                                 # (absent when --resolve runs without --review)
+iter-1/test-ranker-a.md          # test ranker 1 output (only when tests in diff)
+iter-1/test-ranker-b.md          # test ranker 2 output (only when tests in diff)
+iter-1/test-consolidated.md      # consolidator output (only when tests in diff)
 iter-1/pr-feedback.md            # inventory of every comment already on the PR
 iter-1/response-summary.md
 iter-2/review-report.md
+iter-2/test-ranker-a.md
+iter-2/test-ranker-b.md
+iter-2/test-consolidated.md
 iter-2/pr-feedback.md
 iter-2/response-summary.md
 ci/last-poll.json
