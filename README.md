@@ -48,9 +48,11 @@ Stages ②–⑥ are opt-in. With no flags the run ends after ①.
 
 - **Opt-in stages** — every flag defaults to `false`. Bare `pr-autopilot` opens the PR and stops; you turn on review, resolve, and merge as you need them.
 - **Auto title + body** from commits and diff, following Conventional Commits + Jira.
-- **`--show-me` reviewer briefing** — opt-in. Appends a `## What this PR does` section to the PR description (mermaid / file tree / call tree / markdown diff, never HTML) so a human reviewer can read the change, the trade-off, and the alternative that did not ship before the diff. `--auto` does not turn this on. A second run replaces the section instead of duplicating it. With `--resolve`, the section regenerates after an Author push that actually changed the diff.
+- **`--show-me` reviewer briefing** — opt-in. Appends a `## What this PR does` section to the PR description (mermaid / file tree / call tree / markdown diff, never HTML) so a human reviewer can read the change, the trade-off, and the alternative that did not ship before the diff. Combined with `--review`, every Reviewer finding also gets one **comment view** of the same four shapes, on the same line as the finding; the severity marker stays last. Combined with `--resolve`, every Author reply on a thread that still has no reply, and a posted CI triage comment, also get exactly one comment view; already-handled threads and NOISE stay unanswered. `--auto` does not turn this on. A second run replaces the section instead of duplicating it. With `--resolve`, the section regenerates after an Author push that actually changed the diff. The Author does not write the PR visual section.
+- **`--show-me-comments` operator briefing** — opt-in. Prints markdown in the harness conversation for every comment already on the PR: `path:line` when the comment is inline, the quoted remark, and one **comment view** (mermaid / file tree / call tree / markdown diff, never HTML). Top-level comments skip the path line. Not posted to the PR. Not a local HTML file. `--auto` does not turn this on. Without `--resolve`, the run briefs and stops (after the review is posted, if `--review` also ran). With `--resolve`, it briefs after inventory and before the Author touches code. `--auto` or no TTY writes `.pr-autopilot/<PR>/operator-briefing.md` and continues. If `show-me` cannot load: the same alert + `npx skills add FelipeOFF/skills --skill=show-me` as `--show-me`; no fake briefing.
 - **Multi-agent review loop** with structured findings: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Writes like a person, codes like a lazy senior** — every word posted to the PR goes through [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) and every line of code through [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). No `✅ FIXED` stamps, no `[BLOCKER]` brackets, no emoji openers: comments read like a teammate wrote them, and the machine state rides in an invisible HTML marker. Both skills are also restated inside the skill, so a bare harness without them behaves the same.
+- **`--unslop` second prose pass** — opt-in. After humanizer, posted natural-language (generated title and body, Reviewer findings, Author replies, a posted CI triage comment) goes through [`unslop`](https://github.com/cursor/plugins/tree/main/pstack/skills/unslop) in the invoker's voice: the GitHub or GitLab account of this run, sampled from comments that account already left on this repo. No sample → first person, no voice file. `--auto` does not turn this on. If the skill is missing, the run alerts with `npx skills add https://github.com/cursor/plugins --skill=unslop` and continues humanizer-only — it never fakes the pass.
 - **Reviews for over-engineering, not just bugs** — the Reviewer carries the ponytail lens: an abstraction with one caller, a dependency added for three lines, a helper reimplemented when the repo already has one. "Delete this" is a valid finding.
 - **Author with veto power** — the Author can refute a wrong BLOCKER with evidence instead of blindly applying it.
 - **Reads every comment on the PR, not just its own** — with `--resolve`, the Author pulls inline comments, top-level comments and review verdicts from humans *and* bots (Copilot, CodeRabbit, Sonar), classifies each one (critique / question / noise / already handled), infers a severity, and replies inline to each in plain language. Its own past replies are read as state, so it never loops answering itself.
@@ -134,7 +136,7 @@ cp SKILL.md .claude/skills/pr-autopilot/
 ```
 
 When you start typing `/pr-autopilot` in Claude Code, the available flags
-(`--auto`, `--review`, `--resolve`, `--merge`, `--draft`, …) appear inline
+(`--auto`, `--review`, `--resolve`, `--merge`, `--show-me`, `--show-me-comments`, `--unslop`, `--draft`, …) appear inline
 thanks to the `argument-hint` declared in the skill's front-matter — same
 pattern GSD uses.
 
@@ -167,14 +169,15 @@ Everything is opt-in — compose the flags you want (each defaults to `false`):
 | **PR + merge** | `/pr-autopilot --merge` | Creates PR, waits for CI, merges. No review. |
 | **PR + review** | `/pr-autopilot --review` | Creates PR, posts **inline** review comments, stops |
 | **Resolve what's already there** | `/pr-autopilot --resolve` | Skips the AI review. The Author triages every comment already on the PR — human and bot — fixes what's actionable, resolves conflicts, fixes CI, stops before merge |
-| **Review + resolve** | `/pr-autopilot --review --resolve` | Creates PR, posts an inline review, then the Author resolves that review *plus* everything else on the PR, loops, stops before merge (add `--merge` to merge) |
+| **Review + resolve** | `/pr-autopilot --review --resolve` | Creates PR, posts an inline review, then the Author **always** runs — even if that review is APPROVED — on that review *plus* everything else on the PR, loops, stops before merge (add `--merge` to merge) |
 | **Auto (full hands-off)** | `/pr-autopilot --auto` | Everything on, never prompts. Resolves conflicts and fixes CI. Waits for **all** CI checks. Merges only when everything is green. Halts or escalates on any guardrail. |
 
 Notes:
 
-- `--resolve` is independent of `--review`. Alone, it works the feedback the PR already has without adding a review of its own — that's the mode for a PR a human already reviewed.
+- `--resolve` is independent of `--review`. Alone, it works the feedback the PR already has without adding a review of its own — that's the mode for a PR a human already reviewed. Combined with `--review`, the Author still runs after an APPROVED verdict (inventory, conflict check, CI attribution). A quiet pass still prints `conflict: none` and `CI: green`.
 - `--merge` is what enables the merge; without it (or `--auto`) the run always stops before merging.
 - `--auto` is shorthand for `--review --resolve --merge` plus "never ask me anything" — but it never relaxes a guardrail: failing tests, a business-rule conflict, an open BLOCKER, or a red check all halt or escalate.
+- `--auto` does **not** turn on `--show-me`, `--unslop`, or `--show-me-comments`. Those stay opt-in.
 - No prompts means no consent. Anything needing your explicit yes — a business-rule change, or a comment claiming CI is red for reasons outside your PR — is recorded as escalated in `--auto`, never done silently.
 
 ## Usage
@@ -213,8 +216,37 @@ From any branch with commits to ship:
 # Reviewer briefing on the PR description (--auto does not imply this)
 /pr-autopilot --show-me
 
-# Briefing on create; regenerate after Author fixes that change the diff
+# Briefing on the description, plus one comment view on each Reviewer finding
+/pr-autopilot --show-me --review
+
+# Briefing on create; one comment view on each unreplied reply and on a
+# posted CI triage comment; regenerate the section after Author fixes that
+# change the diff
 /pr-autopilot --show-me --resolve
+
+# Operator briefing of comments already on the PR (--auto does not imply this)
+/pr-autopilot --show-me-comments
+
+# Review, then brief those findings plus whatever was already on the PR, then stop
+/pr-autopilot --show-me-comments --review
+
+# Brief after inventory, then Author addresses the findings
+/pr-autopilot --show-me-comments --resolve
+
+# Full hands-off: write .pr-autopilot/<PR>/operator-briefing.md and continue
+/pr-autopilot --auto --show-me-comments
+
+# Second prose pass after humanizer (--auto does not imply this)
+/pr-autopilot --unslop
+
+# Unslop Reviewer finding bodies
+/pr-autopilot --unslop --review
+
+# Unslop Author replies
+/pr-autopilot --unslop --resolve
+
+# Full hands-off plus unslop on every posted prose surface auto already writes
+/pr-autopilot --auto --unslop
 ```
 
 ### Flags
@@ -225,25 +257,27 @@ Every boolean flag defaults to `false` — pass it (bare, or `=true`) to turn th
 |------|---------|-------------|
 | `--auto` | `false` | Full hands-off: turns on `--review`, `--resolve`, `--merge`, never prompts, resolves conflicts + fixes CI. |
 | `--review` | `false` | Run the Reviewer subagent (inline comments) |
-| `--resolve` | `false` | Run the Author subagent — triages every comment already on the PR (human and bot), fixes what's actionable, resolves conflicts, fixes CI. Does **not** imply `--review`. |
+| `--resolve` | `false` | Run the Author subagent — always, even when the Reviewer approved. Triages every comment already on the PR (human and bot), fixes what's actionable, resolves conflicts, fixes CI. Does **not** imply `--review`. |
 | `--merge` | `false` | Enable auto-merge on green CI + `MERGEABLE`. Without it the run stops before merge. |
 | `--max-iterations` | `2` | Max review→respond (and CI-fix) cycles |
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
 | `--base` | auto | Target branch |
 | `--draft` | `false` | Open as draft (forces no merge) |
-| `--show-me` | `false` | Append (or replace) a reviewer briefing on the PR description. Not implied by `--auto`. |
+| `--show-me` | `false` | Append (or replace) a reviewer briefing on the PR description. Combined with `--review`, also puts one comment view on each Reviewer finding. Combined with `--resolve`, also puts one comment view on each unreplied Author reply and on a posted CI triage comment. Not implied by `--auto`. |
+| `--show-me-comments` | `false` | Print an operator briefing of comments already on the PR (quoted remark + one comment view; `path:line` when inline). Not posted. Not implied by `--auto`. |
+| `--unslop` | `false` | After humanizer, run posted prose through unslop in the invoker's voice. Not implied by `--auto`. |
 | `--ci-timeout` | `1800` | Seconds before bailing on CI |
 | `--ci-poll-interval` | `30` | Seconds between polls |
 
 ### Inline review & inline replies
 
-The Reviewer **never** posts a single bulk PR comment. Every finding is posted as an inline comment on the exact file + line. It opens with the words a reviewer says out loud — `Blocking:`, `Suggestion:`, `nit:` — and closes with an invisible marker that carries the severity for the pipeline:
+The Reviewer **never** posts a single bulk PR comment. Every finding is posted as an inline comment on the exact file + line. It opens with the words a reviewer says out loud — `Blocking:`, `Suggestion:`, `nit:` — and closes with an invisible marker that carries the severity for the pipeline. With `--show-me --review`, that same comment also carries exactly one **comment view** (mermaid / file tree / call tree / markdown diff, never HTML) above the marker. Without `--show-me`, findings stay prose-only.
 
 ```html
 <!-- pr-autopilot:severity=blocker -->
 ```
 
-The Author replies on each inline comment in plain language, and closes the reply with the action marker:
+The Author replies on each inline comment in plain language, and closes the reply with the action marker. With `--show-me --resolve`, each reply on a thread that still has no reply, and a posted CI triage comment, also carry exactly one comment view above the marker. Without `--show-me`, replies stay prose-only. A thread that already has an action marker (or an old status-tag reply) is left unanswered — no second reply, no new view. NOISE stays without a reply. The Author does not write the PR visual section.
 
 ```html
 <!-- pr-autopilot:action=fixed sha=abc1234 -->   code was changed
@@ -277,6 +311,7 @@ The orchestrator never lets the agents talk directly. They communicate through *
 
 - `review-report.md` — produced by the Reviewer. Contains `verdict`, `blocker_count`, list of findings. Absent when `--resolve` runs without `--review`.
 - `pr-feedback.md` — produced by the Author before it writes any code. The inventory of every comment already on the PR: author, source, class, inferred severity, and whether it touches a business rule.
+- `operator-briefing.md` — produced by the orchestrator when `--show-me-comments` runs under `--auto` or with no TTY. Harness-only markdown of the comments already on the PR; never posted.
 - `response-summary.md` — produced by the Author. Contains per-finding action (`FIXED`, `REFUTED`, `DEFERRED`, `ANSWERED`), conflict status, per-check CI attribution, commit SHAs, and verification results. These files are machine state and never get posted, which is why they keep the flat uppercase vocabulary the PR comments dropped.
 
 The orchestrator parses the front-matter and decides the next phase. This makes every step **inspectable, replayable, and resumable.**
@@ -305,7 +340,12 @@ See [SECURITY.md](./SECURITY.md) for the full threat model and how to report iss
 [3/6] Author iter 1   → 2 fixed, 1 deferred, 1 answered, replies posted, pushed abc1234
 [3/6] PR visual section replaced
 [3/6] Author iter 1   → conflict in pricing.ts resolved (merged base, groom-me confirmed) def5678
+[3/6] conflict: resolved
+[3/6] CI: not-run
 [2/6] Reviewer iter 2 → APPROVED
+[3/6] Author iter 2   → triaged 12 comments (0 actionable, 3 noise, 9 already handled)
+[3/6] conflict: none
+[3/6] CI: green
 [5/6] CI: waiting… 2/4 pending
 [5/6] CI: unit failed → attributed to this PR → flaky assert corrected, pushed 9ab0cd1
 [5/6] CI: e2e failed → attributed to main (fails at 77f2a1c too) → asked, comment posted
@@ -313,7 +353,7 @@ See [SECURITY.md](./SECURITY.md) for the full threat model and how to report iss
 [6/6] Merged (squash) → main @ ef01234
 ```
 
-The `[mode]` line reflects the flags you passed — `PR only (no flags)`, `--merge`, `--review`, `--resolve`, or `--auto`. Stages that don't run for your mode are simply absent.
+The `[mode]` line reflects the flags you passed — `PR only (no flags)`, `--merge`, `--review`, `--resolve`, `--show-me-comments`, `--unslop`, or `--auto`. Stages that don't run for your mode are simply absent — except the `conflict:` and `CI:` lines, which are never absent when `--resolve` ran.
 
 ## Contributing
 

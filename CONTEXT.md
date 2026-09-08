@@ -44,7 +44,53 @@ _Avoid_: Reviewer (that word already names the Reviewer agent in the pipeline)
 **`--show-me`**:
 Opt-in flag. Generate the PR visual section at create, and regenerate it after
 an Author push that changed the diff. Off by default; `--auto` does not turn
-it on.
+it on. Combined with `--review`, every Reviewer finding also gets a comment
+view. Combined with `--resolve`, every Author reply on a thread that still
+has no reply, and a posted CI triage comment, also get one comment view.
+
+**`--show-me-comments`**:
+Opt-in flag. Print an operator briefing of comments already on the PR.
+Off by default; `--auto` does not turn it on. Without `--resolve`, brief and
+stop (after the review, if `--review` also ran). With `--resolve`, brief after
+inventory and before the Author touches code. `--auto` or no TTY writes a
+local artifact and continues.
+
+**`--resolve`**:
+Opt-in flag. The Author always runs when this is on, even if the Reviewer
+approved. Inventory, conflict check, and CI attribution happen every time.
+_Avoid_: skip Author on APPROVED
+
+**Comment view**:
+A show-me view inside a posted review comment, Author reply, or CI triage
+comment. Same four shapes as a PR visual (mermaid, file tree, call tree,
+markdown diff). Never HTML. Not the PR visual section. One view per
+comment.
+_Avoid_: PR visual, PR visual section, local HTML, PR description
+
+**Unslop pass**:
+The second pass on posted prose, after humanizer. Opt-in `--unslop`.
+`--auto` does not turn it on. Combined with `--review` / `--resolve` it
+covers those stages' posted prose the same way `--show-me` covers their
+views.
+_Avoid_: replacing humanizer, always-on unslop
+
+**Soul**:
+The person who invoked this pr-autopilot run. Identified from the
+GitHub/GitLab account of that invocation; their voice comes from comments
+they already left on this repo. The first person in the unslop pass is
+theirs. Not the Reviewer agent, not the Author agent, not a generic
+teammate.
+_Avoid_: Reviewer, Author, bot persona, generic teammate, voice file
+
+**Operator briefing**:
+A terminal briefing for the person who invoked the skill (`--show-me-comments`).
+Each comment already on the PR: `path:line` when inline, quoted remark, and
+one comment view. Top-level comments omit the path line — do not invent one.
+Markdown in the agent conversation. `--auto` or no TTY writes
+`.pr-autopilot/<PR>/operator-briefing.md` instead of interrupting.
+`--auto` does not turn the flag on. Does not require `--resolve`. Not posted
+to the PR. Not a local HTML file.
+_Avoid_: PR visual section, posted comment view, local HTML, human reviewer
 
 ## Cascade
 
