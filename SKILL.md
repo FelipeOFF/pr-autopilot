@@ -14,9 +14,9 @@ This skill is **rigid**. Follow the phases in order. Do not skip the verificatio
 
 ---
 
-## 0. House style — humanize the prose, ponytail the code
+## 0. House style — humanize the prose, ponytail the code, show-me the views
 
-pr-autopilot produces two kinds of output, and each one has a skill that owns it.
+pr-autopilot produces three kinds of output, and each one has a skill that owns it.
 This binds every agent in the pipeline: the orchestrator, the Reviewer, the Author,
 and anything they spawn.
 
@@ -339,8 +339,12 @@ Capture `PR_NUMBER` and `PR_URL`. Then:
 
 - If `--show-me` is on, fetch the live description and run **§3.4** (apply +
   update the existing PR/MR). Do not skip this because create was skipped.
-- Write or update `.pr-autopilot/<PR_NUMBER>/state.json` with
-  `{iteration, status, pr_url, show_me, head_sha}`.
+  GitHub: the `body` field from `gh pr view --json`. GitLab:
+  `glab mr view <iid> --output json` → `.description`.
+- Write or update `.pr-autopilot/<PR_NUMBER>/state.json`. Set
+  `show_me` to whether `--show-me` is on **this invocation** (do not inherit
+  `true` from a previous run). Set `head_sha` to HEAD. Preserve an existing
+  `iteration` if present; do not reset it to 0.
 - Then jump to **§3.6** with that PR number. Do not generate a new title/body.
 
 ### 3.3 Title + body generation
@@ -412,7 +416,12 @@ approve.>
 3. If `show-me` is missing, do the same by hand: pick at most two of those
    views. A one-line config change gets a small view, not a sequence diagram.
    A large diff gets the slice the reviewer needs, not a map of the repo.
-   Never skip silently. Never emit HTML.
+   Never skip silently. Never emit HTML. Format:
+   - mermaid → a fenced block with language `mermaid` (flowchart or sequence)
+   - file tree → indented tree; every path in backticks
+   - call tree → indented calls; paths in backticks
+   - markdown diff → a fenced block with language `diff`
+   File paths in every view go in backticks, same as the Changes list.
 4. Write the PR briefing (after the opener). Evidence, not adjectives.
 5. Run `humanizer` on the briefing prose only. Leave the opener, heading,
    fences, trees, and paths untouched.
@@ -425,7 +434,9 @@ examples below hold.
 on(apply)
   if body matches section opener (exact sentence)
     replace the heading block
-      start: the ## What this PR does immediately before the opener, else the opener line
+      start: the ## What this PR does that precedes the opener with only
+             blank lines in between (the template has one blank line under
+             the heading). Else the opener line.
       end: next ## heading or EOF
     return body
   append section at end
@@ -1443,7 +1454,7 @@ verification: pass | fail | partial
 - If `conflict: escalated` or `ci: escalated` → halt and surface exactly what needs a human decision (the Author already consulted `groom-me` where it could). When `ci_triage_comment: not-asked`, print the drafted comment body so the user can post it themselves in one paste. Do **not** merge.
 - Validate: every BLOCKER must have `Action: FIXED` or `REFUTED` in `response-summary.md` — the same value its posted reply carries as `action=` in the trailing marker (§0.3). Any BLOCKER with `DEFERRED`/`SKIPPED` → halt and escalate (this is a guardrail violation). This applies to BLOCKERs inferred from external `CHANGES_REQUESTED` reviews exactly as it does to pr-autopilot's own.
 - If a human left `CHANGES_REQUESTED` and has not re-reviewed, the PR is not mergeable regardless of CI — never merge past a standing human block.
-- **PR visual regenerate.** If `state.json.show_me` is true **and** `push_sha` is not `n/a` **and** `git diff <state.head_sha> <push_sha>` is non-empty: fetch the live description, generate a fresh section from the current diff (§3.4), `apply`, update the PR/MR, rewrite `pr-visual.md`, set `head_sha` to `push_sha`, print `PR visual section replaced` (or `appended` if the opener was missing). The orchestrator does this, not the Author. If `--show-me` was off, or there was no push, or the diff is unchanged, leave the description alone.
+- **PR visual regenerate.** Only if `--show-me` is on **this run** (`state.json.show_me` was set from that flag in Phase 1, not inherited from an older run) **and** `push_sha` is not `n/a` **and** `git diff <state.head_sha> <push_sha>` is non-empty: fetch the live description, generate a fresh section from the current diff (§3.4), `apply`, update the PR/MR, rewrite `pr-visual.md`, set `head_sha` to `push_sha`, print `PR visual section replaced` (or `appended` if the opener was missing). The orchestrator does this, not the Author. If this run did not pass `--show-me`, or there was no push, or the diff is unchanged, leave the description alone.
 - If everything green → increment iteration counter. Under `--review` (or `--auto`), return to **Phase 2** with iteration N+1; under a `--resolve`-only run, go to **Phase 5**.
 - After `MAX_ITERATIONS` cycles still not APPROVED (or CI still red) → escalate: print summary of remaining BLOCKERs / red checks and ask user how to proceed (extend iterations / abort). Never force a merge past a guardrail.
 

@@ -4,10 +4,10 @@
 the PR does. If the Author then changes the diff in the same run, a stale
 section lies to the reviewer.
 
-The section is regenerated only when `--show-me` is on *and* the Author's
-push actually changed the diff. A no-op round leaves the section alone. The
-invisible marker around the section is what makes the update a replace, not
-a second copy.
+The section is regenerated only when `--show-me` is on *this run* *and* the
+Author's push actually changed the diff. A no-op round leaves the section
+alone. Presence is the section opener regex (ADR 0006); replacement is the
+heading block through the next `##` or EOF, not an HTML comment.
 
 `--auto` still does not imply `--show-me`. Regeneration is not a new stage;
 it is the same flag applying again.
