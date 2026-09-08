@@ -1,7 +1,7 @@
 ---
 name: pr-autopilot
 description: Orchestrates the full lifecycle of a Pull Request — creation, two-track multi-agent code review (deep maintainability audit for code judo + test-value assessment when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
-argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
+argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--unslop] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
 ---
 
 # pr-autopilot
@@ -16,7 +16,7 @@ This skill is **rigid**. Follow the phases in order. Do not skip the verificatio
 
 ---
 
-## 0. House style — humanize the prose, ponytail the code, show-me the views
+## 0. House style — humanize the prose, unslop the voice, ponytail the code, show-me the views
 
 pr-autopilot produces three kinds of output, and each one has a skill that owns it.
 This binds every agent in the pipeline: the orchestrator, the Reviewer, the Author,
@@ -24,18 +24,20 @@ and anything they spawn.
 
 | Output | Owner skill | Applies to |
 |--------|-------------|------------|
-| Natural-language prose | `humanizer` | PR title and body, review summary, every inline comment, every inline reply, the CI triage comment, the PR briefing after the section opener |
+| Natural-language prose | `humanizer`, then `unslop` when `--unslop` is on | Generated title and body, review summary, every inline comment, every inline reply, the CI triage comment, the PR briefing after the section opener |
 | Code | `ponytail` | Every fix the Author writes, every snippet the Reviewer suggests, conflict resolutions, CI repairs |
 | PR visual views | `show-me` | Mermaid, file tree, call tree, markdown diff inside the PR visual section. Never HTML. |
 
-Invoke them with the `Skill` tool — `skill: "humanizer"`, `skill: "ponytail"`,
-`skill: "show-me"`. Some harnesses namespace ponytail as `ponytail:ponytail`; try
-the plain name first and fall back. **If a skill is not installed, the rules in
-§0.1, §0.2 and §3.4 still bind.** They are the part of each skill this pipeline
-depends on, written out so an agent in a bare harness behaves the same way.
-Subagent prompt templates (§4.5, §5.6) carry their own copy of house style for
-the same reason — a subagent is stateless and never reads this file. The
-orchestrator owns the PR visual section; Reviewer and Author do not write it.
+Invoke them with the `Skill` tool — `skill: "humanizer"`, `skill: "unslop"`,
+`skill: "ponytail"`, `skill: "show-me"`. Some harnesses namespace ponytail as
+`ponytail:ponytail`; try the plain name first and fall back. **If `humanizer` or
+`ponytail` is not installed, the rules in §0.1, §0.2 and §3.4 still bind** —
+those two keep their condensed in-skill fallbacks because they are not opt-in
+flags. **`unslop` is different:** when `--unslop` is on and the skill cannot
+load, print the alert in §0.4 and do **not** fake the pass. Subagent prompt
+templates (§4.5, §5.6) carry their own copy of house style for the same
+reason — a subagent is stateless and never reads this file. The orchestrator
+owns the PR visual section; Reviewer and Author do not write it.
 
 Local artifacts under `.pr-autopilot/` are the exception. They are machine state that
 nobody reads on the PR, so their front-matter and `Action:` fields keep the flat
@@ -44,8 +46,9 @@ are never posted anywhere.
 
 ### 0.1 Prose is written by `humanizer`
 
-Draft the text, run it through the `humanizer` skill, post what comes back. Never
-post the raw draft.
+Draft the text, run it through the `humanizer` skill, then through `unslop`
+when `--unslop` is on this run (§0.4). Never post the raw draft. Humanizer
+always runs first. Unslop does not replace it.
 
 Without the skill, strip these yourself. They are what makes a comment read like a
 bot wrote it:
@@ -66,12 +69,13 @@ Write the way a teammate writes on a PR. Short sentences. Name the file, the lin
 the consequence. "is" and "are" are allowed. First person is allowed. No emoji unless
 the repository already uses them in its own comments.
 
-Do not humanize: code snippets, file paths, SHAs, command lines, machine markers
-(`<!-- pr-autopilot:... -->`), the front-matter of local artifacts, the section
-opener (the first sentence of the PR visual section — exact template, bit-identical
-every run), mermaid fences, file trees, call trees, or markdown diffs in that
-section. Humanize the natural language between them. The PR briefing (the sentences
-after the opener) is humanized; the opener is not.
+Do not humanize or unslop: code snippets, file paths, SHAs, command lines,
+machine markers (`<!-- pr-autopilot:... -->`), the front-matter of local
+artifacts, the section opener (the first sentence of the PR visual section —
+exact template, bit-identical every run), mermaid fences, file trees, call
+trees, or markdown diffs. Rewrite the natural language between them. The PR
+briefing (the sentences after the opener) is humanized, then unslopped when
+the flag is on; the opener is not.
 
 ### 0.2 Code is written by `ponytail`
 
@@ -134,9 +138,112 @@ Marker rules:
 
 - Exactly one marker per posted comment, alone on the last line.
 - `action` is one of `fixed`, `refuted`, `deferred`, `skipped`, `answered`. `sha=` appears only on `fixed`.
-- Never humanize, translate, reword or reformat a marker. It is not prose.
+- Never humanize, unslop, translate, reword or reformat a marker. It is not prose.
 - The marker is what marks a thread handled on the next iteration. A reply without one gets re-answered forever.
 - Replies left by older versions of this skill open with a status tag instead. Read those as handled too (§5.1).
+
+### 0.4 Unslop pass (`--unslop`)
+
+`--unslop` is a second pass on posted natural-language, after humanizer. It
+does not replace humanizer. Default off. `--auto` does not turn it on. Parse
+it like `--review`: the bare form means `true`; `--unslop=false` cancels it.
+
+**Surfaces this run may write** go draft → humanizer → unslop:
+
+- Generated PR title. An explicit `--title` override is left as written.
+- Generated body, and a `--body` starting point: sentence prose only. Test
+  plan checklists, paths, and backticks stay intact. Then `--show-me` apply
+  still runs if that flag is on.
+- Reviewer finding bodies and the top-level review summary
+- Author replies
+- A posted CI triage comment
+- PR briefing prose after the section opener (when `--show-me` is on this run)
+
+`--unslop` without `--review` does not invent a review. `--unslop` without
+`--resolve` does not invent Author replies.
+
+**Soul.** The first person in the unslop pass is the person who invoked this
+run, not the Reviewer agent, not the Author agent, not a generic teammate.
+Resolve the GitHub or GitLab account of this invocation and load a short
+sample of comments that account already left on this repo. No sample → first
+person, no invented voice file.
+
+```bash
+# GitHub
+SOUL=$(gh api user --jq .login)
+gh api "repos/$SLUG/issues/comments?per_page=50" \
+  --jq "[.[] | select(.user.login==\"$SOUL\") | .body][0:8]"
+gh api "repos/$SLUG/pulls/comments?per_page=50" \
+  --jq "[.[] | select(.user.login==\"$SOUL\") | .body][0:8]"
+
+# GitLab
+SOUL=$(glab api user | jq -r .username)
+# notes this account already left on this project (walk recent MR discussions)
+glab api "projects/:id/merge_requests?state=all&per_page=10" \
+  | jq -r '.[].iid' \
+  | while read -r iid; do
+      glab api "projects/:id/merge_requests/$iid/notes" \
+        | jq -r --arg u "$SOUL" '.[] | select(.author.username==$u) | .body'
+    done | head -8
+```
+
+Do this once in Phase 1 when `--unslop` is on. Pass `SOUL` and the sample (or
+`no sample — first person, no invented voice`) into the Reviewer and Author
+prompts — they are stateless and will not read this file.
+
+**Exemptions — never humanize or unslop:** the section opener, markers,
+mermaid fences, file trees, call trees, markdown diffs, file paths, SHAs,
+command lines, and local artifact front-matter. Marker stays alone on the
+last line of a finding, reply, or CI triage comment.
+
+**Missing skill.** If `--unslop` is on and the `unslop` skill cannot load,
+print an alert that names the skill and the install line, then continue.
+Do **not** silently apply a condensed fake of the pass. Posted prose stays
+humanizer-only. Humanizer and ponytail keep their in-skill condensed
+fallbacks (§0.1, §0.2).
+
+```
+[unslop] skill missing — install with:
+npx skills add https://github.com/cursor/plugins --skill=unslop
+```
+
+Load `unslop` (`Skill` tool, `skill: "unslop"`) once in Phase 1 when the
+flag is on. Record `unslop` in run state from this invocation only
+(§3.2, §3.5) — do not inherit `true` from an older run.
+
+**`posted(kind, draft, flags) → markdown`** — the seam for posted text.
+`kind` is one of `title`, `body`, `finding`, `reply`, `ci-triage`. Done
+means the examples below hold.
+
+```
+on(posted)
+  if kind == title and --title was passed
+    return draft unchanged
+  prose = humanizer(draft)            # skip exempt spans
+  if --unslop
+    if unslop skill loaded
+      prose = unslop(prose, soul)     # skip exempt spans
+    else
+      alert + npx install line
+      # prose stays humanizer-only; do not fake unslop
+  if kind in {finding, reply, ci-triage}
+    return prose + marker alone on last line
+  return prose
+```
+
+**Examples (completion criterion for posted):**
+
+1. `--unslop` only, generated body, no opener → body is humanized then unslopped; no PR visual section.
+2. `--unslop --review` → each finding body is humanized then unslopped; marker is the last line.
+3. `--unslop --resolve` → each Author reply is humanized then unslopped; marker is the last line.
+4. `--unslop` and a posted CI triage comment → that prose is humanized then unslopped; marker is the last line.
+5. `--auto` without `--unslop` → no unslop on any surface.
+6. `--auto --unslop` → unslop on every posted prose surface `--auto` already writes.
+7. `--unslop` set and unslop skill missing → alert + npx install line; body still posted via humanizer only; no fake unslop.
+8. `--title` override + `--unslop` → title unchanged; generated body still unslopped.
+9. `--unslop` without `--review` → no review is generated.
+10. `--body` + `--unslop` → starting body humanized then unslopped on sentence prose; Test plan checklists, paths, and backticks intact; `--show-me` apply still runs if that flag is on.
+11. Section opener, markers, fences, trees, diffs, paths, SHAs, and command lines are bit-identical to the draft; marker remains the last line of a finding, reply, or CI triage comment.
 
 ---
 
@@ -164,7 +271,7 @@ Rules that tie the flags together:
 - `--review --resolve` (and `--auto`) keeps the old behavior: pr-autopilot reviews first, then the Author resolves that review *plus* everything else already on the PR.
 - `--merge` is what enables the merge. Without it (and without `--auto`), the pipeline always stops before merging, no matter how green CI is.
 - `--auto` is shorthand for `--review --resolve --merge` plus a "never prompt for confirmation" semantic **and** the aggressive-resolution behavior: in `--auto` (and any `--resolve`) run, the Author resolves merge conflicts and fixes failing CI, not just review comments.
-- `--auto` does **not** turn on `--show-me`. The PR visual section is a separate opt-in.
+- `--auto` does **not** turn on `--show-me` or `--unslop`. Those are separate opt-ins.
 - `--draft` forces no merge even when `--merge`/`--auto` is set.
 - **No prompts means no consent.** Anything that needs the developer's explicit yes — a business-rule change (`groom-me`), or a comment claiming CI is red for reasons outside the PR — is never done silently in `--auto` or in a non-interactive run. It is recorded as `escalated` instead.
 
@@ -189,13 +296,16 @@ required check green AND the PR is `MERGEABLE`.
 | `--ci-timeout` | `1800` | Seconds to wait for checks before bailing. |
 | `--ci-poll-interval` | `30` | Seconds between status polls. Backs off to 60s after 10 polls. |
 | `--title` | auto-generated | Override generated title. |
-| `--body` | auto-generated | Override generated body. Starting point for `--show-me` apply; the flag still appends or replaces the PR visual section. |
+| `--body` | auto-generated | Override generated body. Starting point for `--show-me` apply; the flag still appends or replaces the PR visual section. Sentence prose still goes through `posted` (§0.4). |
 | `--show-me` | `false` | Append (or replace) a PR visual section on the PR description so a human reviewer can read what the change does before the diff. Not implied by `--auto`. |
+| `--unslop` | `false` | After humanizer, run posted prose through `unslop` in the invoker's soul (§0.4). Not implied by `--auto`. |
 
-Boolean flags accept a bare form (`--review`) or an explicit value
-(`--review=true` / `--review=false`). The bare form means `true`. An explicit
-`--review=false` is only useful to cancel a flag that `--auto` would otherwise
-turn on (e.g. `--auto --merge=false` → do everything but stop before merge).
+Boolean flags accept a bare form (`--review`, `--unslop`) or an explicit value
+(`--review=true` / `--review=false`, `--unslop=true` / `--unslop=false`). The
+bare form means `true`. An explicit `--review=false` is only useful to cancel a
+flag that `--auto` would otherwise turn on (e.g. `--auto --merge=false` → do
+everything but stop before merge). `--unslop=false` is the same parse; `--auto`
+does not turn `--unslop` on, so the explicit false is rarely needed.
 
 ### Invocation flow (decision tree)
 
@@ -232,6 +342,10 @@ Invocation examples:
 - `pr-autopilot --show-me` → create the PR with a PR visual section, then stop
 - `pr-autopilot --show-me --resolve` → section on create, regenerate after an Author push that changed the diff
 - `pr-autopilot --auto --show-me` → full hands-off **and** the section (still not implied by `--auto` alone)
+- `pr-autopilot --unslop` → create the PR; generated title and body are humanized then unslopped
+- `pr-autopilot --unslop --review` → each Reviewer finding body is humanized then unslopped
+- `pr-autopilot --unslop --resolve` → each Author reply (and a posted CI triage comment) is humanized then unslopped
+- `pr-autopilot --auto --unslop` → full hands-off **and** unslop on every posted prose surface `--auto` already writes
 
 If no flags are present and the invocation is interactive, the orchestrator MAY
 prompt once: "Which mode? [1] PR only (default)  [2] PR + merge  [3] PR + review
@@ -281,9 +395,11 @@ create the PR and stop.
 **Subagents are stateless.** Each invocation gets a self-contained prompt with: PR number, diff, base ref, and the path to the artifact it must write. Never delegate "understanding" — the orchestrator reads each artifact and decides next phase.
 
 Because they are stateless, every subagent prompt carries its own copy of the house
-style (§0): the Reviewer and the Author each invoke `humanizer` for prose and
-`ponytail` for code, and behave the same way when neither skill is installed in
-their harness.
+style (§0) **and this run's `--unslop` bit**: the Reviewer and the Author each
+invoke `humanizer` for prose, then `unslop` when the flag is on, and `ponytail`
+for code. Humanizer and ponytail keep their condensed fallbacks when missing;
+unslop does not — missing unslop with the flag on is the alert in §0.4. The
+Author prompt still forbids editing the PR description.
 
 Phase 3 only runs under `--resolve`/`--auto`. When it runs, the Author's job is
 the whole PR: it triages every comment already on it (teammates, Copilot,
@@ -328,6 +444,11 @@ esac
 git push -u origin "$BRANCH" 2>/dev/null || git push origin "$BRANCH"
 ```
 
+When `--unslop` is on, load `unslop` (`Skill` tool, `skill: "unslop"`) and
+resolve soul (§0.4). If the skill cannot load, print the alert and continue
+humanizer-only. Record `unslop` from **this invocation** in `state.json` later
+(§3.2 / §3.5) — do not inherit `true`.
+
 ### 3.2 PR existence check
 
 If a PR already exists for this branch, **reuse it**. Do not error out — that's a
@@ -350,7 +471,8 @@ Capture `PR_NUMBER` and `PR_URL`. Then:
   `glab mr view <iid> --output json` → `.description`.
 - Write or update `.pr-autopilot/<PR_NUMBER>/state.json`. Set
   `show_me` to whether `--show-me` is on **this invocation** (do not inherit
-  `true` from a previous run). Set `head_sha` to HEAD. Preserve an existing
+  `true` from a previous run). Set `unslop` the same way from `--unslop` —
+  do not inherit `true`. Set `head_sha` to HEAD. Preserve an existing
   `iteration` if present; do not reset it to 0.
 - Then jump to **§3.6** with that PR number. Do not generate a new title/body.
 
@@ -375,25 +497,29 @@ If `--title`/`--body` not provided:
 - [ ] <concrete checks the reviewer can run>
 ```
 
-6. **Humanize the body before creating the PR.** Pass the generated Summary +
-   Changes prose through the `humanizer` skill (`Skill` tool, `skill: "humanizer"`)
-   and use its output as the PR body. Leave the `## Test plan` checklist, file
-   paths, and backticked identifiers intact — humanize only the sentence prose.
+6. **Run `posted` on the title and body before creating the PR** (§0.4).
+   - Generated title: `TITLE = posted(title, draft, flags)` — humanizer, then
+     unslop if `--unslop`. An explicit `--title` override is left as written.
+   - Generated body: pass the Summary + Changes **sentence prose** through
+     `posted(body, …)`. Leave the `## Test plan` checklist, file paths, and
+     backticked identifiers intact.
 
 If `--body` was provided, that string is the starting body (no Summary/Changes
-generation). `--title` only overrides the title; the body still follows this
-section (generated or `--body`).
+generation). Run `posted(body, …)` on its sentence prose the same way; Test
+plan checklists, paths, and backticks stay intact. `--title` only overrides
+the title; the body still follows this section (generated or `--body`).
 
-If `--show-me` is on, run **§3.4** on this body **before** create, so the PR
-opens with the PR visual section already applied.
+If `--show-me` is on, run **§3.4** on this body **after** `posted` and
+**before** create, so the PR opens with the PR visual section already applied.
 
 ### 3.4 PR visual section (`--show-me`)
 
 The orchestrator owns this. No new subagent. Reviewer and Author do not write
 it. Skip the whole section when `--show-me` is off.
 
-**Section opener** (fixed template, never humanized, never translated, never
-paraphrased — a regex on this sentence is how the next run finds the section):
+**Section opener** (fixed template, never humanized, never unslopped, never
+translated, never paraphrased — a regex on this sentence is how the next run
+finds the section):
 
 ```
 This briefing is for the reviewer: what the change does, the trade-off, and what we did not ship.
@@ -430,8 +556,9 @@ approve.>
    - markdown diff → a fenced block with language `diff`
    File paths in every view go in backticks, same as the Changes list.
 4. Write the PR briefing (after the opener). Evidence, not adjectives.
-5. Run `humanizer` on the briefing prose only. Leave the opener, heading,
-   fences, trees, and paths untouched.
+5. Run `posted` on the briefing prose only (§0.4): humanizer, then unslop
+   if `--unslop` is on this run. Leave the opener, heading, fences, trees,
+   and paths untouched.
 6. Assemble the section in the shape above.
 
 **`apply(body, section) → body`** — this is the seam. Done means the eight
@@ -487,7 +614,8 @@ Print one terminal line: `PR visual section appended` or
 `PR visual section replaced`.
 
 Persist `show_me: true` and `head_sha: <HEAD>` in `state.json` so a later
-Author round can regenerate without re-parsing the prompt.
+Author round can regenerate without re-parsing the prompt. Leave `unslop`
+as already set from this invocation (§3.2 / §3.5).
 
 ### 3.5 Create PR
 
@@ -506,7 +634,9 @@ Capture and persist:
 - `PR_NUMBER`
 - `PR_URL`
 - Initialize `.pr-autopilot/<PR_NUMBER>/state.json` with
-  `{iteration: 0, status: "created", show_me: <bool>, head_sha: "<HEAD>"}`
+  `{iteration: 0, status: "created", show_me: <bool>, unslop: <bool>, head_sha: "<HEAD>"}`
+  `unslop` is whether `--unslop` is on **this invocation** (do not inherit
+  `true` from a previous run).
 
 ### 3.6 Post-creation routing
 
@@ -693,7 +823,10 @@ The orchestrator reads `test-consolidated.md` and converts each removal candidat
 - **Candidate for removal, weaker justification (unjustified cost / unclear duplication)** → `SUGGESTION` severity.
 - **Missing justification** → `SUGGESTION` (not BLOCKER).
 
-The comment body follows the same format as code-review findings (§4.5): humanized prose, opens with `Blocking:` or `Suggestion:`, closes with `<!-- pr-autopilot:severity=blocker|suggestion -->`.
+The comment body follows the same format as code-review findings (§4.5):
+`posted(finding, …)` (§0.4) — humanized, then unslopped when `--unslop` is
+on — opens with `Blocking:` or `Suggestion:`, closes with
+`<!-- pr-autopilot:severity=blocker|suggestion -->`.
 
 Example:
 
@@ -734,10 +867,12 @@ gh api -X POST "repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews" \
 
 For a multi-line comment, use `start_line` + `start_side` + `line` + `side` instead of just `line`.
 
-Every inline comment body is humanized prose that opens the way a reviewer speaks
+Every inline comment body is `posted(finding, …)` (§0.4) — humanized, then
+unslopped when `--unslop` is on — that opens the way a reviewer speaks
 (`Blocking:` / `Suggestion:` / `nit:`) and **must** end with exactly one severity
 marker alone on its last line: `<!-- pr-autopilot:severity=blocker|suggestion|nitpick -->`.
-That marker, not the prose, is what the Author parses next (§0.3).
+Never unslop the marker. That marker, not the prose, is what the Author parses
+next (§0.3).
 
 If `gh api` rejects a `line` (e.g. the line is unchanged in the diff), the Reviewer must anchor to the **nearest changed line** in the same hunk and prefix the body with `(near line X)` so the location is clear. Never silently drop a finding.
 
@@ -779,8 +914,11 @@ Head: <BRANCH>
 Head SHA: <HEAD_SHA>
 Iteration: <N> of <MAX>
 Repo root: <CWD>
+Unslop: <off | on, skill loaded | on, skill missing — humanizer only, do not fake>
+Soul login: <login | n/a>
+Soul sample: <quoted comments this account already left on this repo | no sample — first person, no invented voice>
 
-LOAD YOUR THREE SKILLS FIRST (in this order)
+LOAD YOUR SKILLS FIRST (in this order)
 1. `thermo-nuclear-code-quality-review` (Skill tool, skill: "thermo-nuclear-code-quality-review")
    BEFORE reading the diff. This IS the review standard: core prompt, rules 0–7,
    questions, flag list, remedies, tone, output priority, approval bar. If unavailable,
@@ -792,9 +930,15 @@ LOAD YOUR THREE SKILLS FIRST (in this order)
 3. `humanizer` (Skill tool, skill: "humanizer") before you post anything. It owns
    every word of prose you write. The maintainability audit is direct and demanding;
    humanizer strips AI tells but keeps the directness.
+4. `unslop` (Skill tool, skill: "unslop") AFTER humanizer, ONLY if Unslop is on
+   and the skill loaded. Write in Soul login's first person using Soul sample.
+   If Unslop is on but the skill is missing, do not fake the pass — post the
+   humanizer output. If Unslop is off, skip this skill.
 
-If any skill is unavailable in your harness, the FALLBACK RULES and HOUSE STYLE blocks
-below carry the condensed version — apply those by hand.
+If thermo-nuclear, ponytail, or humanizer is unavailable, the FALLBACK RULES and
+HOUSE STYLE blocks below carry the condensed version — apply those by hand.
+Unslop has no condensed fallback. If it is missing with the flag on, the
+orchestrator already printed the npx install alert; you continue humanizer-only.
 
 YOUR TASK
 1. Read the full diff: git diff <BASE>...<BRANCH>
@@ -836,7 +980,7 @@ Structure each finding with:
 - path (file path)
 - line (or start_line + line for multi-line)
 - side ("RIGHT" for added/modified, "LEFT" for removed-only context)
-- body (humanized prose + severity marker)
+- body (posted prose + severity marker — humanizer, then unslop if Unslop is on)
 
 The orchestrator will use this structure to build the GitHub `comments[]` array or
 the GitLab discussion position blocks.
@@ -869,22 +1013,25 @@ anchor to the nearest CHANGED line in the same hunk and open the body with
 `(near line N)`. Never silently drop a finding.
 
 ──────────────────────────────────────────────────────────────────────────────
-HOUSE STYLE (mandatory) — humanize the prose, ponytail the code
+HOUSE STYLE (mandatory) — humanize the prose, unslop the voice, ponytail the code
 
-PROSE. Run every natural-language body through the `humanizer` skill (Skill tool,
-skill: "humanizer") before you POST it — the top-level review summary and the
-explanation inside each inline comment. Post the humanized text, never the raw
-draft. If the skill is unavailable, strip the tells yourself: status stamps and
-emoji openers, rule of three ("cleaner, safer, and easier to maintain"), em dash
-pile-ups, "not just X but Y", promotional adjectives (robust, seamless,
+PROSE. Draft → `humanizer` (Skill tool, skill: "humanizer") → `unslop` if Unslop
+is on and the skill loaded (Skill tool, skill: "unslop"). Post that, never the
+raw draft. If humanizer is unavailable, strip the tells yourself: status stamps
+and emoji openers, rule of three ("cleaner, safer, and easier to maintain"), em
+dash pile-ups, "not just X but Y", promotional adjectives (robust, seamless,
 comprehensive), AI vocabulary (leverage, delve, crucial, underscore, ensure),
 trailing "-ing" analysis ("…, ensuring maintainability"), vague attribution ("best
 practice suggests"), filler ("it's worth noting that", "in order to"), generic
 closers ("Overall this improves code quality"), and formulaic praise ("Great work
 on this PR!"). Short sentences. Name the file, the line and the consequence. No
 emoji unless the repo already uses them.
-Humanize the prose only. Code snippets, file paths, line refs and the trailing
-marker stay exactly as drafted.
+If Unslop is on and loaded, write in Soul login's first person using Soul sample.
+No sample → first person, no invented pastiche. If Unslop is on but missing, do
+not fake it. If Unslop is off, skip it.
+Humanize and unslop the prose only. Code snippets, file paths, line refs and the
+trailing marker stay exactly as drafted. Never unslop the marker. The marker
+stays alone on the last line.
 
 CODE. Every snippet you suggest goes through `ponytail` first, stopping at the first
 rung that holds: does this need to exist at all → does the repo already have it
@@ -959,7 +1106,8 @@ After both tracks complete (or after the code track alone when no tests are in t
      - `path` = `src/foo.test.ts`
      - `line` = `42`
      - `side` = `RIGHT` (tests are always in the new side of the diff)
-     - `body` = humanized prose (run the justification through `humanizer`) + severity marker
+     - `body` = `posted(finding, justification, flags)` (§0.4) + severity marker
+       (humanizer, then unslop if `--unslop`; marker last line, never rewritten)
      - Severity: tautology / always-green / mocking-the-unit = `blocker`, weaker justifications = `suggestion`
 4. **Deduplicate**: if both tracks flagged the same line (rare), keep the BLOCKER if either is a BLOCKER, else merge the prose.
 5. **Update the front-matter** of `review-report.md`:
@@ -1179,8 +1327,9 @@ glab api -X POST \
 <!-- pr-autopilot:action=fixed sha=<commit_sha> -->"
 ```
 
-The reply body is plain prose, humanized before posting (§0.1), and MUST end with
-exactly one action marker alone on the last line (§0.3):
+The reply body is `posted(reply, …)` (§0.4) — plain prose, humanized, then
+unslopped when `--unslop` is on — and MUST end with exactly one action marker
+alone on the last line (§0.3). Never unslop the marker:
 
 | Marker | Meaning |
 |--------|---------|
@@ -1317,8 +1466,9 @@ to say so on the PR — in this order:
    > job at `<sha>`. Comment that on the PR?
    > [Post the comment] [Skip, just report it to me]
 
-3. **Only on an explicit yes, post it** as a top-level comment. Run the prose through
-   the `humanizer` skill first; keep the evidence lines and the marker verbatim:
+3. **Only on an explicit yes, post it** as a top-level comment. Run the prose
+   through `posted(ci-triage, …)` (§0.4) — humanizer, then unslop if `--unslop`
+   is on. Keep the evidence lines, paths, SHAs, and the marker verbatim:
 
    ```markdown
    **CI check `<check-name>` is failing for a reason outside this PR.**
@@ -1390,6 +1540,9 @@ Trigger: <pr-feedback | review | ci-fix>   (why you were spawned this round)
 Interactive: <yes|no>   (no ⇒ you may not prompt; escalate instead of asking)
 Review report: .pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md   (present only when Trigger=review)
 Repo root: <CWD>
+Unslop: <off | on, skill loaded | on, skill missing — humanizer only, do not fake>
+Soul login: <login | n/a>
+Soul sample: <quoted comments this account already left on this repo | no sample — first person, no invented voice>
 
 You own the whole PR, not just the findings pr-autopilot produced. Make it clean and
 MERGEABLE. Do the parts that apply this round, in this order: (A) inventory + triage
@@ -1415,19 +1568,25 @@ the conflicting file or rule, scoped to the project's memory. A recorded decisio
 outranks a guess.
 
 ──────────────────────────────────────────────────────────────────────────────
-HOUSE STYLE — humanize the prose, ponytail the code (binds everything below)
+HOUSE STYLE — humanize the prose, unslop the voice, ponytail the code (binds everything below)
 
-PROSE. Every reply, comment or PR text you post goes through the `humanizer` skill
-(Skill tool, skill: "humanizer") before posting. Never post the raw draft. If that
-skill is unavailable, strip the tells yourself: status stamps and emoji openers,
-rule of three ("cleaner, safer, and easier to maintain"), em dash pile-ups, "not
-just X but Y", promotional adjectives (robust, seamless, comprehensive), AI
-vocabulary (leverage, delve, crucial, underscore, ensure, streamline), trailing
-"-ing" analysis ("…, ensuring maintainability"), vague attribution ("best practice
-suggests"), filler ("it's worth noting that", "in order to"), generic closers
-("Overall this improves code quality"), and formulaic praise ("Great catch!" every
-single time). Write like a teammate: short sentences, name the file and the
-consequence, no emoji unless the repo already uses them in its own comments.
+PROSE. Every reply, comment or PR text you post goes draft → `humanizer` (Skill
+tool, skill: "humanizer") → `unslop` if Unslop is on and the skill loaded (Skill
+tool, skill: "unslop"). Never post the raw draft. If humanizer is unavailable,
+strip the tells yourself: status stamps and emoji openers, rule of three
+("cleaner, safer, and easier to maintain"), em dash pile-ups, "not just X but Y",
+promotional adjectives (robust, seamless, comprehensive), AI vocabulary (leverage,
+delve, crucial, underscore, ensure, streamline), trailing "-ing" analysis
+("…, ensuring maintainability"), vague attribution ("best practice suggests"),
+filler ("it's worth noting that", "in order to"), generic closers ("Overall this
+improves code quality"), and formulaic praise ("Great catch!" every single time).
+Write like a teammate: short sentences, name the file and the consequence, no
+emoji unless the repo already uses them in its own comments.
+If Unslop is on and loaded, write in Soul login's first person using Soul sample.
+No sample → first person, no invented pastiche. If Unslop is on but missing, do
+not fake it — post the humanizer output. If Unslop is off, skip it.
+Never unslop markers, mermaid fences, file trees, call trees, markdown diffs,
+paths, SHAs, or command lines.
 
 NEVER STAMP A STATUS. No reply opens with ✅ FIXED / 🛑 REFUTED / ⏸ DEFERRED /
 🤷 SKIPPED / 💬 ANSWERED or any label of that shape — that is the loudest signal a
@@ -1439,9 +1598,9 @@ machine state:
     <!-- pr-autopilot:action=deferred -->
     <!-- pr-autopilot:action=skipped -->     (NITPICK only)
     <!-- pr-autopilot:action=answered -->    (QUESTION only)
-Never humanize, translate or reformat a marker. A reply without one gets re-answered
-next round. Local artifacts under .pr-autopilot/ are the exception: they are machine
-state, keep their uppercase vocabulary, and are never posted.
+Never humanize, unslop, translate or reformat a marker. A reply without one gets
+re-answered next round. Local artifacts under .pr-autopilot/ are the exception:
+they are machine state, keep their uppercase vocabulary, and are never posted.
 
 CODE. Every fix, conflict resolution and CI repair goes through the `ponytail` skill
 (Skill tool, skill: "ponytail", falling back to "ponytail:ponytail") first. If it is
@@ -1514,8 +1673,9 @@ Per finding, in order:
 2. Stage and commit using Conventional Commits + Jira when applicable:
      fix(JIRA-XXX): Address review iter-<N> — <brief>
    Capture the resulting commit SHA.
-3. Post an inline REPLY on the corresponding comment. Plain prose, humanized, with
-   the action marker alone on the last line — no status stamp, no emoji opener:
+3. Post an inline REPLY on the corresponding comment. Plain prose through
+   `posted(reply, …)` (humanizer, then unslop if Unslop is on), with the action
+   marker alone on the last line — no status stamp, no emoji opener:
      GitHub (inline comment):
        gh api -X POST repos/<SLUG>/pulls/<PR_NUMBER>/comments/<comment_id>/replies \
          -f body="<one or two sentences on what you did and why>\n\n<optional: snippet of new code>\n\n<!-- pr-autopilot:action=fixed sha=<sha> -->"
@@ -1531,8 +1691,10 @@ Per finding, in order:
    visible text instead of an HTML comment. Pass a literal multi-line string, or
    read the body from a file: `-F body=@reply.md`.
 
-   Draft the sentence, run it through `humanizer`, then append the marker verbatim
-   (never humanize the marker, the SHA or a code snippet). Examples of the sentence:
+   Draft the sentence, run it through `humanizer`, then `unslop` if Unslop is on
+   and loaded, then append the marker verbatim (never humanize or unslop the
+   marker, the SHA or a code snippet). If Unslop is on but missing, skip it —
+   do not fake the pass. Examples of the sentence:
      fixed    → "Good catch. Swapped the header check for session.isAdmin in abc1234."
      refuted  → "This is already covered: parseLimit clamps to 100 on line 34, so
                  the unbounded case never reaches here."
@@ -1601,9 +1763,11 @@ D3. `external` → DO NOT PATCH AROUND IT. Never weaken a check, pin a dependenc
     b) ASK THE DEV — if Interactive=yes, use AskUserQuestion and show the EXACT text
        you intend to post. Never post a "this isn't my PR's fault" comment without an
        explicit yes.
-    c) ON YES — post it as a top-level comment, prose humanized via the `humanizer`
-       skill, evidence lines and marker verbatim, ending with:
+    c) ON YES — post it as a top-level comment via `posted(ci-triage, …)`:
+       prose through `humanizer` then `unslop` if Unslop is on and loaded;
+       evidence lines, paths, SHAs and marker verbatim, ending with:
          <!-- pr-autopilot:ci-triage:<check-name> -->
+       If Unslop is on but missing, post the humanizer output — do not fake it.
        Record `ci_triage_comment: posted`. A "no" records `declined`.
     d) IF Interactive=no — do NOT post. Record `ci: escalated`,
        `ci_triage_comment: not-asked`, and put the full diagnosis plus the drafted
@@ -1784,8 +1948,10 @@ Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `sta
 |-----------|--------|
 | PR already exists | Reuse PR number, skip creation. If `--show-me`, still run §3.4 on the live description |
 | `--show-me` and `show-me` skill missing | Use the condensed fallback in §3.4. Never skip silently. Never emit HTML |
+| `--unslop` and `unslop` skill missing | Alert that names `unslop` and `npx skills add https://github.com/cursor/plugins --skill=unslop`. Do not fake the pass. Continue; posted prose stays humanizer-only |
 | `--show-me` Author round with no push or unchanged diff | Leave the description alone |
 | `--resolve` / `--auto` without `--show-me` | Never write a PR visual section |
+| `--auto` without `--unslop` | Never run the unslop pass |
 | Working tree dirty | Ask user to commit; do not auto-stash |
 | Push rejected (non-fast-forward) | Stop, ask user — do not force-push |
 | Author agent breaks lint/tests | Halt loop, surface logs |
@@ -1822,7 +1988,7 @@ skip a BLOCKER, and **never** silently change a business rule — `groom-me` fir
 Layout under `.pr-autopilot/<PR_NUMBER>/`:
 
 ```
-state.json                       # {iteration, status, pr_url, platform, started_at, show_me, head_sha}
+state.json                       # {iteration, status, pr_url, platform, started_at, show_me, unslop, head_sha}
 pr-visual.md                     # last applied PR visual section (absent when --show-me is off)
 iter-1/review-report.md          # merged findings from code + test tracks
                                  # (absent when --resolve runs without --review)
@@ -1893,6 +2059,21 @@ pr-autopilot --show-me --resolve
 
 # Full hands-off plus the briefing
 pr-autopilot --auto --show-me
+
+# Second prose pass after humanizer (--auto does not imply this)
+pr-autopilot --unslop
+
+# Unslop Reviewer finding bodies
+pr-autopilot --unslop --review
+
+# Unslop Author replies (and a posted CI triage comment)
+pr-autopilot --unslop --resolve
+
+# Full hands-off plus unslop on every posted prose surface auto already writes
+pr-autopilot --auto --unslop
+
+# Compose: unslop on title/body, findings, and replies
+pr-autopilot --review --resolve --unslop
 ```
 
 ---
@@ -1903,6 +2084,7 @@ Keep terminal output terse. Per phase, emit one line:
 
 ```
 [mode] --auto (full hands-off)
+[unslop] skill missing — npx skills add https://github.com/cursor/plugins --skill=unslop
 [1/6] PR #482 created → https://github.com/acme/api/pull/482
 [1/6] PR visual section appended
 [2/6] Reviewer iter 1 → CHANGES_REQUESTED (2 BLOCKER, 3 SUGGESTION) — 5 inline comments posted
@@ -1919,7 +2101,9 @@ Keep terminal output terse. Per phase, emit one line:
 ```
 
 The `[mode]` line reflects the flags in play — e.g. `PR only (no flags)`,
-`--merge`, `--review`, `--resolve`, or `--auto (full hands-off)`. Phases that don't
-run for the chosen mode are simply absent from the output.
+`--merge`, `--review`, `--resolve`, `--unslop`, or `--auto (full hands-off)`.
+Phases that don't run for the chosen mode are simply absent from the output.
+The `[unslop] skill missing` line prints only when `--unslop` is on and the
+skill cannot load; the rest of the pipeline continues.
 
 On any halt, print: phase, reason, the artifact path the user should inspect, and 1–2 suggested next actions. On an `escalated` halt (business-rule conflict / unfixable CI), name exactly what needs a human decision.

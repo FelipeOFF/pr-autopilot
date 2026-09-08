@@ -51,6 +51,7 @@ Stages ②–⑥ are opt-in. With no flags the run ends after ①.
 - **`--show-me` reviewer briefing** — opt-in. Appends a `## What this PR does` section to the PR description (mermaid / file tree / call tree / markdown diff, never HTML) so a human reviewer can read the change, the trade-off, and the alternative that did not ship before the diff. `--auto` does not turn this on. A second run replaces the section instead of duplicating it. With `--resolve`, the section regenerates after an Author push that actually changed the diff.
 - **Multi-agent review loop** with structured findings: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Writes like a person, codes like a lazy senior** — every word posted to the PR goes through [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) and every line of code through [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). No `✅ FIXED` stamps, no `[BLOCKER]` brackets, no emoji openers: comments read like a teammate wrote them, and the machine state rides in an invisible HTML marker. Both skills are also restated inside the skill, so a bare harness without them behaves the same.
+- **`--unslop` second prose pass** — opt-in. After humanizer, posted natural-language (generated title and body, Reviewer findings, Author replies, a posted CI triage comment) goes through [`unslop`](https://github.com/cursor/plugins/tree/main/pstack/skills/unslop) in the invoker's voice: the GitHub or GitLab account of this run, sampled from comments that account already left on this repo. No sample → first person, no voice file. `--auto` does not turn this on. If the skill is missing, the run alerts with `npx skills add https://github.com/cursor/plugins --skill=unslop` and continues humanizer-only — it never fakes the pass.
 - **Reviews for over-engineering, not just bugs** — the Reviewer carries the ponytail lens: an abstraction with one caller, a dependency added for three lines, a helper reimplemented when the repo already has one. "Delete this" is a valid finding.
 - **Author with veto power** — the Author can refute a wrong BLOCKER with evidence instead of blindly applying it.
 - **Reads every comment on the PR, not just its own** — with `--resolve`, the Author pulls inline comments, top-level comments and review verdicts from humans *and* bots (Copilot, CodeRabbit, Sonar), classifies each one (critique / question / noise / already handled), infers a severity, and replies inline to each in plain language. Its own past replies are read as state, so it never loops answering itself.
@@ -134,7 +135,7 @@ cp SKILL.md .claude/skills/pr-autopilot/
 ```
 
 When you start typing `/pr-autopilot` in Claude Code, the available flags
-(`--auto`, `--review`, `--resolve`, `--merge`, `--draft`, …) appear inline
+(`--auto`, `--review`, `--resolve`, `--merge`, `--show-me`, `--unslop`, `--draft`, …) appear inline
 thanks to the `argument-hint` declared in the skill's front-matter — same
 pattern GSD uses.
 
@@ -175,6 +176,7 @@ Notes:
 - `--resolve` is independent of `--review`. Alone, it works the feedback the PR already has without adding a review of its own — that's the mode for a PR a human already reviewed.
 - `--merge` is what enables the merge; without it (or `--auto`) the run always stops before merging.
 - `--auto` is shorthand for `--review --resolve --merge` plus "never ask me anything" — but it never relaxes a guardrail: failing tests, a business-rule conflict, an open BLOCKER, or a red check all halt or escalate.
+- `--auto` does **not** turn on `--show-me` or `--unslop`. Those stay opt-in.
 - No prompts means no consent. Anything needing your explicit yes — a business-rule change, or a comment claiming CI is red for reasons outside your PR — is recorded as escalated in `--auto`, never done silently.
 
 ## Usage
@@ -215,6 +217,18 @@ From any branch with commits to ship:
 
 # Briefing on create; regenerate after Author fixes that change the diff
 /pr-autopilot --show-me --resolve
+
+# Second prose pass after humanizer (--auto does not imply this)
+/pr-autopilot --unslop
+
+# Unslop Reviewer finding bodies
+/pr-autopilot --unslop --review
+
+# Unslop Author replies
+/pr-autopilot --unslop --resolve
+
+# Full hands-off plus unslop on every posted prose surface auto already writes
+/pr-autopilot --auto --unslop
 ```
 
 ### Flags
@@ -232,6 +246,7 @@ Every boolean flag defaults to `false` — pass it (bare, or `=true`) to turn th
 | `--base` | auto | Target branch |
 | `--draft` | `false` | Open as draft (forces no merge) |
 | `--show-me` | `false` | Append (or replace) a reviewer briefing on the PR description. Not implied by `--auto`. |
+| `--unslop` | `false` | After humanizer, run posted prose through unslop in the invoker's voice. Not implied by `--auto`. |
 | `--ci-timeout` | `1800` | Seconds before bailing on CI |
 | `--ci-poll-interval` | `30` | Seconds between polls |
 

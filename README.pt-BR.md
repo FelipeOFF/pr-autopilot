@@ -52,6 +52,7 @@ Os estágios ②–⑥ são opt-in. Sem nenhuma flag, a execução termina depoi
 - **Loop de review multi-agente** com achados estruturados: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Author com poder de veto** — pode refutar um BLOCKER incorreto com evidência ao invés de aplicar cegamente.
 - **Escreve como gente, codifica como sênior preguiçoso** — cada palavra postada no PR passa pela [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) e cada linha de código pela [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). Sem carimbo `✅ FIXED`, sem colchete `[BLOCKER]`, sem emoji de abertura: o comentário parece escrito por um colega, e o estado de máquina viaja num marcador HTML invisível. As duas skills também estão reescritas dentro da própria skill, então um harness sem elas se comporta igual.
+- **`--unslop` segundo passe de prosa** — opt-in. Depois do humanizer, a prosa postada (título e body gerados, achados do Reviewer, respostas do Author, um comentário de triagem de CI) passa pela [`unslop`](https://github.com/cursor/plugins/tree/main/pstack/skills/unslop) na voz de quem invocou: a conta GitHub ou GitLab desta execução, amostrada nos comentários que essa conta já deixou neste repo. Sem amostra → primeira pessoa, sem arquivo de voz. `--auto` não liga isso. Se a skill estiver ausente, a execução alerta com `npx skills add https://github.com/cursor/plugins --skill=unslop` e segue só com humanizer — nunca finge o passe.
 - **Revisa over-engineering, não só bug** — o Reviewer carrega a lente ponytail: abstração com um único caller, dependência adicionada por três linhas, helper reimplementado quando o repo já tem um. "Apaga isso" é um achado válido.
 - **Lê todo comentário do PR, não só os dele** — com `--resolve`, o Author puxa comentários inline, comentários de topo e vereditos de review de humanos *e* de bots (Copilot, CodeRabbit, Sonar), classifica cada um (crítica / pergunta / ruído / já tratado), infere a severidade e responde inline em cada um, em linguagem de gente, com o marcador invisível carregando o estado. As respostas que ele mesmo deixou são lidas como estado, então ele nunca entra em loop respondendo a si mesmo.
 - **Resolve o PR inteiro** — com `--resolve`/`--auto`, o Author também resolve **conflitos de merge** (fazendo merge da base no feature branch, sem force-push) e **corrige o CI falhando** (lê os logs, corrige o código, roda a verificação de novo, dá push).
@@ -134,7 +135,7 @@ cp SKILL.md .claude/skills/pr-autopilot/
 ```
 
 Ao começar a digitar `/pr-autopilot` no Claude Code, as flags disponíveis
-(`--auto`, `--review`, `--resolve`, `--merge`, `--draft`, …) aparecem
+(`--auto`, `--review`, `--resolve`, `--merge`, `--show-me`, `--unslop`, `--draft`, …) aparecem
 inline graças ao `argument-hint` declarado no front-matter da skill — mesmo
 padrão usado pelo GSD.
 
@@ -175,6 +176,7 @@ Observações:
 - `--resolve` é independente de `--review`. Sozinha, trabalha o feedback que o PR já tem sem acrescentar um review próprio — é o modo para um PR que um humano já revisou.
 - `--merge` é o que habilita o merge; sem ele (ou `--auto`) a execução sempre para antes do merge.
 - `--auto` é abreviação para `--review --resolve --merge` mais "nunca me pergunte nada" — mas nunca relaxa um guardrail: testes falhando, um conflito em regra de negócio, um BLOCKER aberto ou um check vermelho abortam ou escalam.
+- `--auto` **não** liga `--show-me` nem `--unslop`. Essas continuam opt-in.
 - Não perguntar significa não ter consentimento. O que exige o seu sim explícito — mudar uma regra de negócio, ou comentar que o CI está vermelho por causa alheia ao PR — vira `escalated` no `--auto`, nunca é feito em silêncio.
 
 ## Uso
@@ -215,6 +217,18 @@ De qualquer branch com commits para enviar:
 
 # Briefing na criação; regenera depois de fixes do Author que mudam o diff
 /pr-autopilot --show-me --resolve
+
+# Segundo passe de prosa depois do humanizer (--auto não implica isso)
+/pr-autopilot --unslop
+
+# Unslop nos achados do Reviewer
+/pr-autopilot --unslop --review
+
+# Unslop nas respostas do Author
+/pr-autopilot --unslop --resolve
+
+# Hands-off total mais unslop em toda prosa postada que o auto já escreve
+/pr-autopilot --auto --unslop
 ```
 
 ### Flags
@@ -232,6 +246,7 @@ Toda flag booleana tem default `false` — passe-a (pura, ou `=true`) para ligar
 | `--base` | auto | Branch alvo |
 | `--draft` | `false` | Abre como draft (força sem merge) |
 | `--show-me` | `false` | Anexa (ou troca) um briefing para o revisor na descrição do PR. `--auto` não liga. |
+| `--unslop` | `false` | Depois do humanizer, passa a prosa postada pelo unslop na voz de quem invocou. `--auto` não liga. |
 | `--ci-timeout` | `1800` | Segundos antes de desistir do CI |
 | `--ci-poll-interval` | `30` | Intervalo entre polls |
 
