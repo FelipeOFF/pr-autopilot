@@ -1,7 +1,7 @@
 ---
 name: pr-autopilot
 description: Orchestrates the full lifecycle of a Pull Request — creation, two-track multi-agent code review (deep maintainability audit for code judo + test-value assessment when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
-argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--unslop] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
+argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--show-me-comments] [--unslop] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
 ---
 
 # pr-autopilot
@@ -18,8 +18,8 @@ This skill is **rigid**. Follow the phases in order. Do not skip the verificatio
 
 ## 0. House style — humanize the prose, unslop the voice, ponytail the code, show-me the views
 
-pr-autopilot produces three kinds of output (views split into the PR visual and
-comment views), and each one has a skill that owns it.
+pr-autopilot produces three kinds of output (views split into the PR visual,
+comment views, and the operator briefing), and each one has a skill that owns it.
 This binds every agent in the pipeline: the orchestrator, the Reviewer, the Author,
 and anything they spawn.
 
@@ -29,22 +29,25 @@ and anything they spawn.
 | Code | `ponytail` | Every fix the Author writes, every snippet the Reviewer suggests, conflict resolutions, CI repairs |
 | PR visual views | `show-me` | Mermaid, file tree, call tree, markdown diff inside the PR visual section. Never HTML. |
 | Comment views | `show-me` | Same four shapes, one per Reviewer finding when `--show-me --review`. Never HTML. Not the PR visual section. |
+| Operator briefing | `show-me` | Same four shapes, one per comment already on the PR when `--show-me-comments`. Harness-only markdown. Never posted. Never HTML. |
 
 Invoke them with the `Skill` tool — `skill: "humanizer"`, `skill: "unslop"`,
 `skill: "ponytail"`, `skill: "show-me"`. Some harnesses namespace ponytail as
 `ponytail:ponytail`; try the plain name first and fall back. **If `humanizer` or
 `ponytail` is not installed, the rules in §0.1 and §0.2 still bind.** The PR
 visual section keeps the condensed `show-me` fallback in §3.4. **Comment views
-do not.** If `--show-me` is on and `show-me` cannot load: print an alert that
-names `show-me` and the install line `npx skills add FelipeOFF/skills --skill=show-me`,
-emit no HTML, do not invent a comment view, and continue the rest of the
-pipeline (§4.3). Print that alert once per run. **`unslop` is different:** when
-`--unslop` is on and the skill cannot load, print the alert in §0.4 and do
-**not** fake the pass. Subagent prompt templates (§4.5, §5.6) carry their own
-copy of house style — a subagent is stateless and never reads this file. The
-orchestrator owns the PR visual section; Reviewer and Author do not write it.
-The Reviewer prompt receives this run's `--show-me` bit so it can load `show-me`
-for comment views. The Author still must not rewrite the PR description.
+and the operator briefing do not.** If `--show-me` or `--show-me-comments` is
+on and `show-me` cannot load: print an alert that names `show-me` and the
+install line `npx skills add FelipeOFF/skills --skill=show-me`, emit no HTML,
+do not invent a comment view, skip the operator briefing (do not fake views),
+and continue the rest of the pipeline (§4.3, §3.7). Print that alert once per
+run. **`unslop` is different:** when `--unslop` is on and the skill cannot load,
+print the alert in §0.4 and do **not** fake the pass. Subagent prompt templates
+(§4.5, §5.6) carry their own copy of house style — a subagent is stateless and
+never reads this file. The orchestrator owns the PR visual section and the
+operator briefing; Reviewer and Author do not write either. The Reviewer prompt
+receives this run's `--show-me` bit so it can load `show-me` for comment views.
+The Author still must not rewrite the PR description.
 
 Local artifacts under `.pr-autopilot/` are the exception. They are machine state that
 nobody reads on the PR, so their front-matter and `Action:` fields keep the flat
@@ -80,10 +83,11 @@ Do not humanize or unslop: code snippets, file paths, SHAs, command lines,
 machine markers (`<!-- pr-autopilot:... -->`), the front-matter of local
 artifacts, the section opener (the first sentence of the PR visual section —
 exact template, bit-identical every run), mermaid fences, file trees, call
-trees, or markdown diffs in the PR visual section **or** in a comment view.
-Rewrite the natural language between them. The PR briefing (the sentences
-after the opener) is humanized, then unslopped when the flag is on; the
-opener is not.
+trees, or markdown diffs in the PR visual section, in a comment view, **or**
+in the operator briefing. Rewrite the natural language between them. The PR
+briefing (the sentences after the opener) is humanized, then unslopped when
+the flag is on; the opener is not. Quoted remarks in the operator briefing
+are the comment's own words — do not humanize, unslop, or paraphrase them.
 
 ### 0.2 Code is written by `ponytail`
 
@@ -281,9 +285,11 @@ Rules that tie the flags together:
 - `--review --resolve` (and `--auto`) reviews first, then the Author resolves that review *plus* everything else already on the PR — and still runs when the Reviewer approved.
 - `--merge` is what enables the merge. Without it (and without `--auto`), the pipeline always stops before merging, no matter how green CI is.
 - `--auto` is shorthand for `--review --resolve --merge` plus a "never prompt for confirmation" semantic **and** the aggressive-resolution behavior: in `--auto` (and any `--resolve`) run, the Author resolves merge conflicts and fixes failing CI, not just review comments.
-- `--auto` does **not** turn on `--show-me` or `--unslop`. The PR visual section
-  and comment views are a separate opt-in. `--show-me` without `--review` still
-  only means the PR visual section (existing behavior), not a new review.
+- `--auto` does **not** turn on `--show-me`, `--unslop`, or `--show-me-comments`.
+  The PR visual section, comment views, and the operator briefing are separate
+  opt-ins. `--show-me` without `--review` still only means the PR visual
+  section (existing behavior), not a new review. `--show-me-comments` without
+  `--resolve` briefs and stops (after the review, if `--review` also ran).
 - `--draft` forces no merge even when `--merge`/`--auto` is set.
 - **No prompts means no consent.** Anything that needs the developer's explicit yes — a business-rule change (`groom-me`), or a comment claiming CI is red for reasons outside the PR — is never done silently in `--auto` or in a non-interactive run. It is recorded as `escalated` instead.
 
@@ -310,14 +316,17 @@ required check green AND the PR is `MERGEABLE`.
 | `--title` | auto-generated | Override generated title. |
 | `--body` | auto-generated | Override generated body. Starting point for `--show-me` apply; the flag still appends or replaces the PR visual section. Sentence prose still goes through `posted` (§0.4). |
 | `--show-me` | `false` | Append (or replace) a PR visual section on the PR description so a human reviewer can read what the change does before the diff. Combined with `--review`, every Reviewer finding also gets one comment view (mermaid / file tree / call tree / markdown diff, never HTML) on the same line as the finding. Not implied by `--auto`. |
+| `--show-me-comments` | `false` | Print an operator briefing of comments already on the PR: `path:line` when inline, quoted remark, one comment view. Harness-only markdown. Never posted. Never HTML. Not implied by `--auto`. See §3.7. |
 | `--unslop` | `false` | After humanizer, run posted prose through `unslop` in the invoker's soul (§0.4). Not implied by `--auto`. |
 
-Boolean flags accept a bare form (`--review`, `--unslop`) or an explicit value
-(`--review=true` / `--review=false`, `--unslop=true` / `--unslop=false`). The
-bare form means `true`. An explicit `--review=false` is only useful to cancel a
-flag that `--auto` would otherwise turn on (e.g. `--auto --merge=false` → do
-everything but stop before merge). `--unslop=false` is the same parse; `--auto`
-does not turn `--unslop` on, so the explicit false is rarely needed.
+Boolean flags accept a bare form (`--review`, `--unslop`, `--show-me`,
+`--show-me-comments`) or an explicit value (`--review=true` / `--review=false`,
+`--unslop=true` / `--unslop=false`, `--show-me-comments=true` /
+`--show-me-comments=false`). The bare form means `true`. An explicit
+`--review=false` is only useful to cancel a flag that `--auto` would otherwise
+turn on (e.g. `--auto --merge=false` → do everything but stop before merge).
+`--unslop=false` and `--show-me-comments=false` are the same parse; `--auto`
+does not turn those on, so the explicit false is rarely needed.
 
 ### Invocation flow (decision tree)
 
@@ -356,6 +365,10 @@ Invocation examples:
 - `pr-autopilot --show-me --review` → PR visual section **and** one comment view on each Reviewer finding
 - `pr-autopilot --show-me --resolve` → section on create, regenerate after an Author push that changed the diff
 - `pr-autopilot --auto --show-me` → full hands-off **and** the section (still not implied by `--auto` alone); because `--auto` already turns on `--review`, findings get comment views too
+- `pr-autopilot --show-me-comments` → fetch comments already on the PR, print an operator briefing, STOP. No Author. No new posts
+- `pr-autopilot --show-me-comments --review` → Phase 2 posts the review, then brief (including those findings), STOP
+- `pr-autopilot --show-me-comments --resolve` → brief after inventory, then Author addresses findings
+- `pr-autopilot --auto --show-me-comments` → write `.pr-autopilot/<PR>/operator-briefing.md`, do not interrupt, continue `--auto`
 - `pr-autopilot --unslop` → create the PR; generated title and body are humanized then unslopped
 - `pr-autopilot --unslop --review` → each Reviewer finding body is humanized then unslopped
 - `pr-autopilot --unslop --resolve` → each Author reply (and a posted CI triage comment) is humanized then unslopped
@@ -416,7 +429,8 @@ for code. Humanizer and ponytail keep their condensed fallbacks when missing;
 unslop does not — missing unslop with the flag on is the alert in §0.4. The
 Reviewer prompt also receives this run's `--show-me` bit. When it is on, the
 Reviewer loads `show-me` for comment views (§4.3). The Author still must not
-edit the PR description.
+edit the PR description. The orchestrator owns the operator briefing
+(§3.7) — no new subagent. The Author does not write it.
 
 Phase 3 only runs under `--resolve`/`--auto`, and when those flags are on it
 **always** runs after Phase 2 — including when the Reviewer verdict is APPROVED.
@@ -470,6 +484,11 @@ resolve soul (§0.4). If the skill cannot load, print the alert and continue
 humanizer-only. Record `unslop` from **this invocation** in `state.json` later
 (§3.2 / §3.5) — do not inherit `true`.
 
+When `--show-me` or `--show-me-comments` is on, load `show-me` (`Skill` tool,
+`skill: "show-me"`). If it cannot load, print the alert in §3.4 / §3.7 once
+this run. Record `show_me` and `show_me_comments` from **this invocation**
+later in `state.json` — do not inherit `true`.
+
 ### 3.2 PR existence check
 
 If a PR already exists for this branch, **reuse it**. Do not error out — that's a
@@ -492,9 +511,10 @@ Capture `PR_NUMBER` and `PR_URL`. Then:
   `glab mr view <iid> --output json` → `.description`.
 - Write or update `.pr-autopilot/<PR_NUMBER>/state.json`. Set
   `show_me` to whether `--show-me` is on **this invocation** (do not inherit
-  `true` from a previous run). Set `unslop` the same way from `--unslop` —
-  do not inherit `true`. Set `head_sha` to HEAD. Preserve an existing
-  `iteration` if present; do not reset it to 0.
+  `true` from a previous run). Set `show_me_comments` the same way from
+  `--show-me-comments` — do not inherit `true`. Set `unslop` the same way
+  from `--unslop` — do not inherit `true`. Set `head_sha` to HEAD. Preserve
+  an existing `iteration` if present; do not reset it to 0.
 - Then jump to **§3.6** with that PR number. Do not generate a new title/body.
 
 ### 3.3 Title + body generation
@@ -573,8 +593,8 @@ approve.>
    those views. A one-line config change gets a small view, not a sequence
    diagram. A large diff gets the slice the reviewer needs, not a map of the
    repo. Never skip the PR visual silently. Never emit HTML. Do **not** use
-   this fallback to invent **comment views** (§4.3) — those stay omitted when
-   the skill is missing. Format:
+   this fallback to invent **comment views** (§4.3) or an **operator briefing**
+   (§3.7) — those stay omitted when the skill is missing. Format:
    - mermaid → a fenced block with language `mermaid` (flowchart or sequence)
    - file tree → indented tree; every path in backticks
    - call tree → indented calls; paths in backticks
@@ -640,7 +660,7 @@ Print one terminal line: `PR visual section appended` or
 
 Persist `show_me: true` and `head_sha: <HEAD>` in `state.json` so a later
 Author round can regenerate without re-parsing the prompt. Leave `unslop`
-as already set from this invocation (§3.2 / §3.5).
+and `show_me_comments` as already set from this invocation (§3.2 / §3.5).
 
 ### 3.5 Create PR
 
@@ -659,23 +679,161 @@ Capture and persist:
 - `PR_NUMBER`
 - `PR_URL`
 - Initialize `.pr-autopilot/<PR_NUMBER>/state.json` with
-  `{iteration: 0, status: "created", show_me: <bool>, unslop: <bool>, head_sha: "<HEAD>"}`
-  `unslop` is whether `--unslop` is on **this invocation** (do not inherit
-  `true` from a previous run).
+  `{iteration: 0, status: "created", show_me: <bool>, show_me_comments: <bool>, unslop: <bool>, head_sha: "<HEAD>"}`
+  `show_me`, `show_me_comments`, and `unslop` are whether those flags are on
+  **this invocation** (do not inherit `true` from a previous run).
 
 ### 3.6 Post-creation routing
 
 Route by the flags that are on (`--auto` implies `--review`, `--resolve` and
-`--merge`):
+`--merge`; it does **not** imply `--show-me-comments`):
 
-- **No `--review`, `--resolve`, `--merge` or `--auto`** → STOP here. Print the PR
-  URL and exit. This is the default "PR only" mode.
+- **`--show-me-comments` without `--review` and without `--resolve`** (and
+  without `--auto`) → run **§3.7**, then STOP. Print the PR URL and exit.
+  No Author. No new posts. `--merge` does not override this stop.
+- **No `--review`, `--resolve`, `--merge` or `--auto`** (and no
+  `--show-me-comments`) → STOP here. Print the PR URL and exit. This is the
+  default "PR only" mode.
 - **`--review`** (with or without `--resolve`) → go to **Phase 2**.
+  `--show-me-comments --review` without `--resolve` briefs after the review
+  is posted (§4.7), then STOP.
 - **`--resolve` without `--review`** → skip Phase 2 entirely and go straight to
   **Phase 3** with `Trigger=pr-feedback`. There is no `review-report.md` this run;
-  the Author's findings come from the PR's own comments (§5.1).
-- **`--merge` only** (no review, no resolve) → go to **Phase 5** (CI), then
-  **Phase 6** (merge).
+  the Author's findings come from the PR's own comments (§5.1). If
+  `--show-me-comments` is also on, brief after inventory and before code
+  (§3.7, §5.1).
+- **`--merge` only** (no review, no resolve, no `--show-me-comments`) → go to
+  **Phase 5** (CI), then **Phase 6** (merge).
+
+### 3.7 Operator briefing (`--show-me-comments`)
+
+The orchestrator owns this. No new subagent. Reviewer and Author do not write
+it. Skip the whole section when `--show-me-comments` is off. `--auto` does
+**not** turn this flag on.
+
+An **operator briefing** is harness-only markdown for the person who invoked
+this run. One block per comment already on the PR. Not a PR comment. Not the
+PR visual section. Not a posted comment view. Never HTML. Never posted.
+
+**When to run**
+
+- `--show-me-comments` without `--resolve` and without `--review`: after
+  Phase 1 reuse/create (§3.6), fetch comments, `brief()`, STOP. No Author.
+  No new posts.
+- `--show-me-comments --review` without `--resolve`: after Phase 2 posts the
+  review (§4.7), `brief()` (including the just-posted findings), STOP.
+- `--show-me-comments --resolve`: after the comment inventory (§5.1 /
+  `pr-feedback.md` when it exists this iteration; otherwise the same fetch
+  as §5.1 Step 1), `brief()`, **then** the Author addresses findings. Do
+  not brief after code.
+- `--auto --show-me-comments` or no TTY: write
+  `.pr-autopilot/<PR_NUMBER>/operator-briefing.md`, do not prompt, continue
+  the rest of the pipeline.
+
+**Fetch**
+
+GitHub — same two endpoints as §5.1 Step 1:
+
+```bash
+# inline review comments
+gh api "repos/$SLUG/pulls/$PR/comments" --paginate \
+  --jq '.[] | {id, path, line, body}'
+
+# top-level PR conversation comments
+gh api "repos/$SLUG/issues/$PR/comments" --paginate \
+  --jq '.[] | {id, body}'
+```
+
+GitLab: `glab api "projects/:id/merge_requests/<IID>/discussions"` — a note
+with `position.new_path` / `position.new_line` is inline; a note without
+position is top-level.
+
+When `--resolve` is on and
+`.pr-autopilot/<PR_NUMBER>/iter-<N>/pr-feedback.md` already exists this
+iteration, use its `path:line` and `quote` fields instead of re-fetching.
+Prefer that file so the briefing sits after inventory and before the Author
+touches code.
+
+**Missing `show-me` skill.** If `--show-me-comments` is on and the Skill tool
+cannot load `show-me`: print an alert that names `show-me` and the install
+line `npx skills add FelipeOFF/skills --skill=show-me` (once per run, same
+alert as §3.4 / §4.3). Skip the briefing. Do not fake views. Do not emit
+HTML. Continue the rest of the pipeline.
+
+**`brief(comments) → markdown`** — this is the seam. Done means the examples
+below hold.
+
+```
+on(brief)
+  if --show-me-comments is off
+    return nothing
+  if show-me skill missing
+    alert + npx install line (once per run)
+    return nothing          # do not fake views
+  blocks = []
+  for each comment already on the PR
+    quote = visible remark (strip a trailing <!-- pr-autopilot:... --> marker)
+    view  = exactly one of {mermaid, file tree, call tree, markdown diff}
+    if comment is inline (has path and line)
+      block = `path:line`
+              > quote
+              <blank>
+              view
+    else                    # top-level: no path
+      block = > quote
+              <blank>
+              view
+      never invent a path:line
+  join blocks with a blank line
+  never post this markdown to the PR
+  never HTML
+  if --auto or no TTY
+    write .pr-autopilot/<PR_NUMBER>/operator-briefing.md
+    do not prompt
+    continue
+  else
+    print the markdown in the harness conversation
+```
+
+Format of a view: same as §4.3 / §3.4, one of mermaid / file tree / call
+tree / markdown diff. File paths in every view go in backticks. Pick the
+smallest view that makes *this* remark clear.
+
+**Block shape**
+
+Inline:
+
+```
+`src/foo.ts:42`
+> checkout still calls chargeCard after reserveInventory fails
+
+checkout
+  reserveInventory
+    chargeCard
+```
+
+Top-level (no path line):
+
+```
+> does this handle the empty cart?
+
+cart.ts
+  checkout
+    empty → return
+```
+
+**Examples (completion criterion for brief):**
+
+1. `--show-me-comments` without `--resolve` and without `--review`, existing PR → fetch comments, print briefing, STOP. No Author. No new posts.
+2. `--show-me-comments --review` without `--resolve` → Phase 2 posts the review, then briefing includes those findings, then STOP.
+3. `--show-me-comments --resolve` → briefing after inventory, before the Author touches code. Do not brief after the push.
+4. `--auto --show-me-comments` or no TTY → write `.pr-autopilot/<PR>/operator-briefing.md`, do not prompt, continue.
+5. Inline comment → block starts with `` `path:line` ``, then quoted remark, then exactly one comment view.
+6. Top-level comment → no path line; quote + one view. Do not invent `path:line`.
+7. `--show-me-comments` and `show-me` missing → one alert naming `show-me` plus `npx skills add FelipeOFF/skills --skill=show-me`; no briefing; no fake views; pipeline continues.
+8. `--auto` without `--show-me-comments` → no operator briefing.
+9. `brief()` output is never posted to the PR. Never HTML.
+10. `state.json.show_me_comments` is whether the flag is on **this invocation** (do not inherit `true`).
 
 ---
 
@@ -878,7 +1036,8 @@ findings get comment views too.
 
 The PR visual section is unchanged: description only, at most two views,
 `apply()` as in §3.4, opener bit-identical. Reviewer and Author still must not
-rewrite the PR description.
+rewrite the PR description. The operator briefing (`--show-me-comments`, §3.7)
+is a separate surface — harness-only, never posted as a finding.
 
 **Who writes the view.** The Reviewer prompt includes this run's `--show-me` bit
 and, when it is on, loads `show-me` to pick one view per finding. The orchestrator
@@ -889,7 +1048,7 @@ write finding bodies.
 **Missing `show-me` skill.** If `--show-me` is on and the Skill tool cannot load
 `show-me`: print an alert that names `show-me` and the install line
 `npx skills add FelipeOFF/skills --skill=show-me` (once per run, same alert as
-§3.4). Do not emit HTML. Do not silently invent comment views. Post the findings
+§3.4 / §3.7). Do not emit HTML. Do not silently invent comment views. Post the findings
 as prose + marker. Continue the rest of the pipeline (PR created, review posted,
 resolve if that flag is on). The PR visual section still uses the condensed
 fallback in §3.4.
@@ -1060,6 +1219,7 @@ condensed fallback. If it is missing with the flag on, the orchestrator already
 printed the npx install alert; you continue humanizer-only.
 
 Do not edit the PR description. The orchestrator owns the PR visual section.
+Do not write an operator briefing. The orchestrator owns `--show-me-comments`.
 
 YOUR TASK
 1. Read the full diff: git diff <BASE>...<BRANCH>
@@ -1271,10 +1431,15 @@ not skip the Author when the Reviewer approved.
   Author round still inventories every comment already on the PR (§5.1), checks
   merge conflicts (§5.3), and attributes CI (§5.4). External CI stays external —
   never patch around it. `Trigger=review` when Phase 2 just ran (so
-  `review-report.md` is in scope for dedup). After Phase 3, §5.7 decides whether
-  to re-review or poll CI.
+  `review-report.md` is in scope for dedup). If `--show-me-comments` is on,
+  brief after inventory and before code (§3.7). After Phase 3, §5.7 decides
+  whether to re-review or poll CI.
 - **`--review` without `--resolve`** (and without `--auto`):
-  - `verdict: APPROVED` and `--merge` on → jump to **Phase 5** (CI). No Author.
+  - If `--show-me-comments` is on, run **§3.7** first (the briefing includes
+    the just-posted findings). Then STOP. No Author. `--merge` does not
+    override this stop.
+  - `verdict: APPROVED` and `--merge` on (and `--show-me-comments` off) →
+    jump to **Phase 5** (CI). No Author.
   - otherwise → STOP. Print the PR URL and exit. No Author. No `conflict:` / `CI:`
     lines from resolve.
 - **`--resolve` off and `verdict: CHANGES_REQUESTED`** → STOP (mode "PR + review").
@@ -1302,18 +1467,31 @@ from the test track.
    and `CI: green`, then Phase 5. Does not re-enter Phase 2.
 7. A red check attributed `external` → not patched around. Record `ci: escalated`
    when non-interactive / `--auto`.
+8. `--show-me-comments --review` without `--resolve` → after the review is posted,
+   run §3.7 (includes those findings), STOP. No Author. No new posts beyond the
+   review itself. `--merge` does not override this stop.
 
 ---
 
 ## 5. Phase 3 — Author Subagent (Resolve everything: PR feedback, conflicts, CI)
 
 This phase only runs when `--resolve` (or `--auto`) is set. `--review` without
-`--resolve` stops at the end of Phase 2 — no Author.
+`--resolve` stops at the end of Phase 2 — no Author. `--show-me-comments`
+without `--resolve` also stops before this phase (after §3.7).
 
 When `--resolve`/`--auto` is on, Phase 3 **always** runs after Phase 2, including
 when `verdict: APPROVED` and `blocker_count: 0`. Do not skip to Phase 5. Inventory,
 conflict check, and CI attribution happen every time. External CI is still not
 patched around (§5.4).
+
+When `--show-me-comments` is also on, the orchestrator runs `brief()` (§3.7)
+**after** the inventory (§5.1 / `pr-feedback.md`) and **before** the Author
+addresses findings (§5.2). Spawn the Author with `Trigger=inventory` first if
+`pr-feedback.md` is missing this iteration; wait for that artifact; brief;
+then spawn the Author again with `Trigger=pr-feedback` / `review` / `ci-fix`
+as today. Run `brief()` **once this invocation**, on that first inventory.
+Skip it on `Trigger=ci-fix` and on later iterations. Do not brief after code.
+No new subagent.
 
 The Author owns the **whole PR**, not just the findings pr-autopilot itself produced.
 Its job is to make the PR clean and mergeable. It has four responsibilities, in this
@@ -1449,6 +1627,13 @@ changes_requested_by: <login, login | none>
 
 `business_rule: yes` on any entry is what routes that finding through `groom-me` in
 §5.2. Decide it here, while reading, not later while coding.
+
+**Operator briefing.** If `--show-me-comments` is on this run, the orchestrator
+now runs `brief()` (§3.7) from this inventory — print it in the harness, or
+write `.pr-autopilot/<PR_NUMBER>/operator-briefing.md` when `--auto` or there
+is no TTY — **then** the Author addresses findings (§5.2). Do not brief after
+code. The Author does not write the briefing and still must not edit the PR
+description.
 
 ### 5.2 Address findings & reply inline
 
@@ -1745,9 +1930,10 @@ Owner/repo (or project_id): <SLUG>
 Branch: <BRANCH>  (you must commit and push to this branch)
 Base: <BASE>
 Iteration: <N>  of <MAX>
-Trigger: <pr-feedback | review | ci-fix>   (why you were spawned this round)
+Trigger: <pr-feedback | review | ci-fix | inventory>   (why you were spawned this round)
 Interactive: <yes|no>   (no ⇒ you may not prompt; escalate instead of asking)
 show_me: <true|false>   (this invocation only; do not inherit from an older run)
+show_me_comments: <true|false>   (this invocation only; do not inherit from an older run. You do not write the operator briefing.)
 Review report: .pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md   (present only when Trigger=review)
 Repo root: <CWD>
 Unslop: <off | on, skill loaded | on, skill missing — humanizer only, do not fake>
@@ -1760,9 +1946,16 @@ every comment on the PR, (B) address the findings, (C) merge conflicts, (D) CI.
 (A), (C) and (D) always run this round — including when the Reviewer just approved
 and there is nothing to fix. A quiet pass still records `conflict: none` and
 `ci: green` or `not-run`. Do not edit the PR description. The orchestrator owns
-the PR visual section.
-Do not add a comment view to a reply or to a CI triage comment. Finding comment
-views (when show_me is true) are already on the Reviewer comments.
+the PR visual section and the operator briefing (`--show-me-comments`).
+Do not write an operator briefing. Do not add a comment view to a reply or to
+a CI triage comment. Finding comment views (when show_me is true) are already
+on the Reviewer comments.
+
+If Trigger=inventory: do (A) only. Write
+`.pr-autopilot/<PR_NUMBER>/iter-<N>/pr-feedback.md` and STOP. No code, no
+replies, no commit, no push. Skip (B), (C), (D), PUSH, and
+`response-summary.md`. The orchestrator will brief from that inventory, then
+spawn you again to address findings.
 
 GOLDEN RULE — never silently change a business rule.
 Before you act on a comment, resolve a conflict, or write a CI fix that would alter
@@ -1866,6 +2059,9 @@ through groom-me in (B).
 
 Write .pr-autopilot/<PR_NUMBER>/iter-<N>/pr-feedback.md with the full inventory
 BEFORE touching code.
+
+If Trigger=inventory, STOP here after writing that file. The orchestrator
+owns the operator briefing that follows.
 
 ──────────────────────────────────────────────────────────────────────────────
 (B) ADDRESS THE FINDINGS
@@ -2088,6 +2284,7 @@ verification: pass | fail | partial
 - Validate: every BLOCKER must have `Action: FIXED` or `REFUTED` in `response-summary.md` — the same value its posted reply carries as `action=` in the trailing marker (§0.3). Any BLOCKER with `DEFERRED`/`SKIPPED` → halt and escalate (this is a guardrail violation). This applies to BLOCKERs inferred from external `CHANGES_REQUESTED` reviews exactly as it does to pr-autopilot's own.
 - If a human left `CHANGES_REQUESTED` and has not re-reviewed, the PR is not mergeable regardless of CI — never merge past a standing human block.
 - **PR visual regenerate.** Only if `--show-me` is on **this run** (`state.json.show_me` was set from that flag in Phase 1, not inherited from an older run) **and** `push_sha` is not `n/a` **and** `git diff <state.head_sha> <push_sha>` is non-empty: fetch the live description, generate a fresh section from the current diff (§3.4), `apply`, update the PR/MR, rewrite `pr-visual.md`, set `head_sha` to `push_sha`, print `PR visual section replaced` (or `appended` if the opener was missing). The orchestrator does this, not the Author. If this run did not pass `--show-me`, or there was no push, or the diff is unchanged, leave the description alone.
+- **Do not run `brief()` here.** Operator briefing already ran after inventory when `--show-me-comments` was on this run (§3.7, §5.1). Do not brief after code. Do not post the briefing.
 - **Print the resolve outcome.** Whenever `--resolve`/`--auto` ran this invocation, print two lines from `response-summary.md`, even on a quiet pass:
   ```
   [3/6] conflict: none
@@ -2183,10 +2380,17 @@ Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `sta
 |-----------|--------|
 | PR already exists | Reuse PR number, skip creation. If `--show-me`, still run §3.4 on the live description |
 | `--show-me` and `show-me` skill missing | Alert once naming `show-me` plus `npx skills add FelipeOFF/skills --skill=show-me`. PR visual section still uses the condensed fallback in §3.4. No HTML. No silent fake comment views. Pipeline continues |
+| `--show-me-comments` and `show-me` skill missing | Same alert + npx line as `--show-me`. Skip the operator briefing. Do not fake views. Do not post anything as a briefing. Pipeline continues |
 | `--unslop` and `unslop` skill missing | Alert that names `unslop` and `npx skills add https://github.com/cursor/plugins --skill=unslop`. Do not fake the pass. Continue; posted prose stays humanizer-only |
 | `--show-me --review` | Each Reviewer finding (code + test track) gets exactly one comment view (§4.3). Marker last line. PR visual section unchanged |
 | `--review` without `--show-me` | Findings stay prose-only. No comment view |
 | `--show-me` without `--review` | PR visual section only. No new review, no comment views |
+| `--show-me-comments` without `--resolve` and without `--review` | Fetch comments already on the PR, print operator briefing (§3.7), STOP. No Author. No new posts |
+| `--show-me-comments --review` without `--resolve` | Phase 2 posts the review, then brief (including those findings), STOP. No Author |
+| `--show-me-comments --resolve` | Brief after inventory (`pr-feedback.md`), before the Author touches code. Do not brief after the push |
+| `--auto --show-me-comments` or no TTY | Write `.pr-autopilot/<PR>/operator-briefing.md`. Do not prompt. Continue the rest of the pipeline |
+| `--auto` without `--show-me-comments` | No operator briefing |
+| Operator briefing | Never posted to the PR. Never HTML. Inline comments include `path:line`; top-level comments do not invent a path |
 | `--show-me` Author round with no push or unchanged diff | Leave the description alone |
 | `--resolve` / `--auto` without `--show-me` | Never write a PR visual section. Never write a comment view |
 | `--auto` without `--unslop` | Never run the unslop pass |
@@ -2228,8 +2432,9 @@ skip a BLOCKER, and **never** silently change a business rule — `groom-me` fir
 Layout under `.pr-autopilot/<PR_NUMBER>/`:
 
 ```
-state.json                       # {iteration, status, pr_url, platform, started_at, show_me, unslop, head_sha}
+state.json                       # {iteration, status, pr_url, platform, started_at, show_me, show_me_comments, unslop, head_sha}
 pr-visual.md                     # last applied PR visual section (absent when --show-me is off)
+operator-briefing.md             # operator briefing when --show-me-comments and (--auto or no TTY)
 iter-1/review-report.md          # merged findings from code + test tracks
                                  # (absent when --resolve runs without --review)
 iter-1/test-ranker-a.md          # test ranker 1 output (only when tests in diff)
@@ -2304,6 +2509,18 @@ pr-autopilot --show-me --resolve
 # --auto already turns on --review)
 pr-autopilot --auto --show-me
 
+# Operator briefing of comments already on the PR (opt-in; --auto does not imply this)
+pr-autopilot --show-me-comments
+
+# Review, then brief those findings plus whatever was already on the PR, then stop
+pr-autopilot --show-me-comments --review
+
+# Brief after inventory, then Author addresses the findings
+pr-autopilot --show-me-comments --resolve
+
+# Full hands-off: write .pr-autopilot/<PR>/operator-briefing.md and continue
+pr-autopilot --auto --show-me-comments
+
 # Second prose pass after humanizer (--auto does not imply this)
 pr-autopilot --unslop
 
@@ -2367,19 +2584,58 @@ Quiet pass after APPROVED (`--review --resolve`):
 ```
 
 The `[mode]` line reflects the flags in play — e.g. `PR only (no flags)`,
-`--merge`, `--review`, `--resolve`, `--unslop`, or `--auto (full hands-off)`.
+`--merge`, `--review`, `--resolve`, `--show-me-comments`, `--unslop`, or
+`--auto (full hands-off)`.
 Phases that don't run for the chosen mode are simply absent from the output —
 except the conflict and CI lines, which are never absent when `--resolve` ran.
 
-On a `--show-me` run where `show-me` cannot load, also print (once):
+On a `--show-me` or `--show-me-comments` run where `show-me` cannot load, also
+print (once):
 
 ```
 [1/6] show-me skill missing — skipped comment views. npx skills add FelipeOFF/skills --skill=show-me
 ```
 
-The PR visual section still uses the §3.4 fallback. The rest of the pipeline
-continues.
+The PR visual section still uses the §3.4 fallback. The operator briefing is
+skipped (do not fake views). The rest of the pipeline continues.
 The `[unslop] skill missing` line prints only when `--unslop` is on and the
 skill cannot load; the rest of the pipeline continues.
+
+On a `--show-me-comments` run with the skill loaded, print the briefing in the
+harness (or a one-liner pointing at the artifact when `--auto` or no TTY),
+then a count line:
+
+```
+[1/6] operator briefing → 3 comments (2 inline, 1 top-level)
+```
+
+```
+[1/6] operator briefing written → .pr-autopilot/482/operator-briefing.md
+```
+
+`--show-me-comments` without `--resolve` (after the review, if `--review` also
+ran) then STOPs. With `--resolve`, that count line prints after inventory and
+before the Author addresses findings.
+
+Quiet operator-briefing-only run (`--show-me-comments` on an existing PR):
+
+```
+[mode] --show-me-comments
+[1/6] PR #482 reused → https://github.com/acme/api/pull/482
+`src/foo.ts:42`
+> checkout still calls chargeCard after reserveInventory fails
+
+checkout
+  reserveInventory
+    chargeCard
+
+> does this handle the empty cart?
+
+cart.ts
+  checkout
+    empty → return
+
+[1/6] operator briefing → 2 comments (1 inline, 1 top-level)
+```
 
 On any halt, print: phase, reason, the artifact path the user should inspect, and 1–2 suggested next actions. On an `escalated` halt (business-rule conflict / unfixable CI), name exactly what needs a human decision.
