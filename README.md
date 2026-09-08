@@ -48,6 +48,7 @@ Stages ②–⑥ are opt-in. With no flags the run ends after ①.
 
 - **Opt-in stages** — every flag defaults to `false`. Bare `pr-autopilot` opens the PR and stops; you turn on review, resolve, and merge as you need them.
 - **Auto title + body** from commits and diff, following Conventional Commits + Jira.
+- **`--show-me` reviewer briefing** — opt-in. Appends a `## What this PR does` section to the PR description (mermaid / file tree / call tree / markdown diff, never HTML) so a human reviewer can read the change, the trade-off, and the alternative that did not ship before the diff. `--auto` does not turn this on. A second run replaces the section instead of duplicating it. With `--resolve`, the section regenerates after an Author push that actually changed the diff.
 - **Multi-agent review loop** with structured findings: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Writes like a person, codes like a lazy senior** — every word posted to the PR goes through [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) and every line of code through [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). No `✅ FIXED` stamps, no `[BLOCKER]` brackets, no emoji openers: comments read like a teammate wrote them, and the machine state rides in an invisible HTML marker. Both skills are also restated inside the skill, so a bare harness without them behaves the same.
 - **Reviews for over-engineering, not just bugs** — the Reviewer carries the ponytail lens: an abstraction with one caller, a dependency added for three lines, a helper reimplemented when the repo already has one. "Delete this" is a valid finding.
@@ -208,6 +209,12 @@ From any branch with commits to ship:
 
 # Draft PR (creation only)
 /pr-autopilot --draft
+
+# Reviewer briefing on the PR description (--auto does not imply this)
+/pr-autopilot --show-me
+
+# Briefing on create; regenerate after Author fixes that change the diff
+/pr-autopilot --show-me --resolve
 ```
 
 ### Flags
@@ -224,6 +231,7 @@ Every boolean flag defaults to `false` — pass it (bare, or `=true`) to turn th
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
 | `--base` | auto | Target branch |
 | `--draft` | `false` | Open as draft (forces no merge) |
+| `--show-me` | `false` | Append (or replace) a reviewer briefing on the PR description. Not implied by `--auto`. |
 | `--ci-timeout` | `1800` | Seconds before bailing on CI |
 | `--ci-poll-interval` | `30` | Seconds between polls |
 
@@ -291,9 +299,11 @@ See [SECURITY.md](./SECURITY.md) for the full threat model and how to report iss
 ```
 [mode] --auto (full hands-off)
 [1/6] PR #482 created → https://github.com/acme/api/pull/482
+[1/6] PR visual section appended
 [2/6] Reviewer iter 1 → CHANGES_REQUESTED (2 BLOCKER, 3 SUGGESTION) — 5 inline comments posted
 [3/6] Author iter 1   → triaged 12 comments (7 actionable, 3 noise, 2 already handled)
 [3/6] Author iter 1   → 2 fixed, 1 deferred, 1 answered, replies posted, pushed abc1234
+[3/6] PR visual section replaced
 [3/6] Author iter 1   → conflict in pricing.ts resolved (merged base, groom-me confirmed) def5678
 [2/6] Reviewer iter 2 → APPROVED
 [5/6] CI: waiting… 2/4 pending

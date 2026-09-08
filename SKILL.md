@@ -1,7 +1,7 @@
 ---
 name: pr-autopilot
 description: Orchestrates the full lifecycle of a Pull Request — creation, two-track multi-agent code review (deep maintainability audit for code judo + test-value assessment when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
-argument-hint: "[--auto] [--review] [--resolve] [--merge] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
+argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
 ---
 
 # pr-autopilot
@@ -16,24 +16,26 @@ This skill is **rigid**. Follow the phases in order. Do not skip the verificatio
 
 ---
 
-## 0. House style — humanize the prose, ponytail the code
+## 0. House style — humanize the prose, ponytail the code, show-me the views
 
-pr-autopilot produces two kinds of output, and each one has a skill that owns it.
+pr-autopilot produces three kinds of output, and each one has a skill that owns it.
 This binds every agent in the pipeline: the orchestrator, the Reviewer, the Author,
 and anything they spawn.
 
 | Output | Owner skill | Applies to |
 |--------|-------------|------------|
-| Natural-language prose | `humanizer` | PR title and body, review summary, every inline comment, every inline reply, the CI triage comment |
+| Natural-language prose | `humanizer` | PR title and body, review summary, every inline comment, every inline reply, the CI triage comment, the PR briefing after the section opener |
 | Code | `ponytail` | Every fix the Author writes, every snippet the Reviewer suggests, conflict resolutions, CI repairs |
+| PR visual views | `show-me` | Mermaid, file tree, call tree, markdown diff inside the PR visual section. Never HTML. |
 
-Invoke them with the `Skill` tool — `skill: "humanizer"`, `skill: "ponytail"`. Some
-harnesses namespace the second one as `ponytail:ponytail`; try the plain name first
-and fall back. **If a skill is not installed, the rules in §0.1 and §0.2 still bind.**
-They are the part of each skill this pipeline depends on, written out so an agent in
-a bare harness behaves the same way. Subagent prompt templates (§4.5, §5.6) carry
-their own copy for the same reason — a subagent is stateless and never reads this
-file.
+Invoke them with the `Skill` tool — `skill: "humanizer"`, `skill: "ponytail"`,
+`skill: "show-me"`. Some harnesses namespace ponytail as `ponytail:ponytail`; try
+the plain name first and fall back. **If a skill is not installed, the rules in
+§0.1, §0.2 and §3.4 still bind.** They are the part of each skill this pipeline
+depends on, written out so an agent in a bare harness behaves the same way.
+Subagent prompt templates (§4.5, §5.6) carry their own copy of house style for
+the same reason — a subagent is stateless and never reads this file. The
+orchestrator owns the PR visual section; Reviewer and Author do not write it.
 
 Local artifacts under `.pr-autopilot/` are the exception. They are machine state that
 nobody reads on the PR, so their front-matter and `Action:` fields keep the flat
@@ -65,8 +67,11 @@ the consequence. "is" and "are" are allowed. First person is allowed. No emoji u
 the repository already uses them in its own comments.
 
 Do not humanize: code snippets, file paths, SHAs, command lines, machine markers
-(`<!-- pr-autopilot:... -->`), or the front-matter of local artifacts. Humanize the
-natural language between them.
+(`<!-- pr-autopilot:... -->`), the front-matter of local artifacts, the section
+opener (the first sentence of the PR visual section — exact template, bit-identical
+every run), mermaid fences, file trees, call trees, or markdown diffs in that
+section. Humanize the natural language between them. The PR briefing (the sentences
+after the opener) is humanized; the opener is not.
 
 ### 0.2 Code is written by `ponytail`
 
@@ -159,6 +164,7 @@ Rules that tie the flags together:
 - `--review --resolve` (and `--auto`) keeps the old behavior: pr-autopilot reviews first, then the Author resolves that review *plus* everything else already on the PR.
 - `--merge` is what enables the merge. Without it (and without `--auto`), the pipeline always stops before merging, no matter how green CI is.
 - `--auto` is shorthand for `--review --resolve --merge` plus a "never prompt for confirmation" semantic **and** the aggressive-resolution behavior: in `--auto` (and any `--resolve`) run, the Author resolves merge conflicts and fixes failing CI, not just review comments.
+- `--auto` does **not** turn on `--show-me`. The PR visual section is a separate opt-in.
 - `--draft` forces no merge even when `--merge`/`--auto` is set.
 - **No prompts means no consent.** Anything that needs the developer's explicit yes — a business-rule change (`groom-me`), or a comment claiming CI is red for reasons outside the PR — is never done silently in `--auto` or in a non-interactive run. It is recorded as `escalated` instead.
 
@@ -183,7 +189,8 @@ required check green AND the PR is `MERGEABLE`.
 | `--ci-timeout` | `1800` | Seconds to wait for checks before bailing. |
 | `--ci-poll-interval` | `30` | Seconds between status polls. Backs off to 60s after 10 polls. |
 | `--title` | auto-generated | Override generated title. |
-| `--body` | auto-generated | Override generated body. |
+| `--body` | auto-generated | Override generated body. Starting point for `--show-me` apply; the flag still appends or replaces the PR visual section. |
+| `--show-me` | `false` | Append (or replace) a PR visual section on the PR description so a human reviewer can read what the change does before the diff. Not implied by `--auto`. |
 
 Boolean flags accept a bare form (`--review`) or an explicit value
 (`--review=true` / `--review=false`). The bare form means `true`. An explicit
@@ -222,6 +229,9 @@ Invocation examples:
 - `pr-autopilot --resolve --merge` → resolve existing feedback + merge on green CI
 - `pr-autopilot --auto` → full hands-off; merges only when CI is green
 - `pr-autopilot --auto --merge-strategy=rebase --max-iterations=3`
+- `pr-autopilot --show-me` → create the PR with a PR visual section, then stop
+- `pr-autopilot --show-me --resolve` → section on create, regenerate after an Author push that changed the diff
+- `pr-autopilot --auto --show-me` → full hands-off **and** the section (still not implied by `--auto` alone)
 
 If no flags are present and the invocation is interactive, the orchestrator MAY
 prompt once: "Which mode? [1] PR only (default)  [2] PR + merge  [3] PR + review
@@ -320,15 +330,29 @@ git push -u origin "$BRANCH" 2>/dev/null || git push origin "$BRANCH"
 
 ### 3.2 PR existence check
 
-If a PR already exists for this branch, **reuse it** (skip creation, jump to Phase 2 with that PR number). Do not error out — that's a normal re-run.
+If a PR already exists for this branch, **reuse it**. Do not error out — that's a
+normal re-run.
 
 ```bash
 # GitHub
-gh pr view --json number,url,state -q '.number' 2>/dev/null
+gh pr view --json number,url,state,body -q '{number,url,state,body}' 2>/dev/null
 
 # GitLab
 glab mr list --source-branch "$BRANCH" --output json | jq '.[0].iid'
+# then: glab mr view <iid>  (description is the body)
 ```
+
+Capture `PR_NUMBER` and `PR_URL`. Then:
+
+- If `--show-me` is on, fetch the live description and run **§3.4** (apply +
+  update the existing PR/MR). Do not skip this because create was skipped.
+  GitHub: the `body` field from `gh pr view --json`. GitLab:
+  `glab mr view <iid> --output json` → `.description`.
+- Write or update `.pr-autopilot/<PR_NUMBER>/state.json`. Set
+  `show_me` to whether `--show-me` is on **this invocation** (do not inherit
+  `true` from a previous run). Set `head_sha` to HEAD. Preserve an existing
+  `iteration` if present; do not reset it to 0.
+- Then jump to **§3.6** with that PR number. Do not generate a new title/body.
 
 ### 3.3 Title + body generation
 
@@ -356,7 +380,116 @@ If `--title`/`--body` not provided:
    and use its output as the PR body. Leave the `## Test plan` checklist, file
    paths, and backticked identifiers intact — humanize only the sentence prose.
 
-### 3.4 Create PR
+If `--body` was provided, that string is the starting body (no Summary/Changes
+generation). `--title` only overrides the title; the body still follows this
+section (generated or `--body`).
+
+If `--show-me` is on, run **§3.4** on this body **before** create, so the PR
+opens with the PR visual section already applied.
+
+### 3.4 PR visual section (`--show-me`)
+
+The orchestrator owns this. No new subagent. Reviewer and Author do not write
+it. Skip the whole section when `--show-me` is off.
+
+**Section opener** (fixed template, never humanized, never translated, never
+paraphrased — a regex on this sentence is how the next run finds the section):
+
+```
+This briefing is for the reviewer: what the change does, the trade-off, and what we did not ship.
+```
+
+**Section shape:**
+
+```markdown
+## What this PR does
+
+This briefing is for the reviewer: what the change does, the trade-off, and what we did not ship.
+
+<at most two show-me views: mermaid, file tree, call tree, or markdown diff>
+
+<PR briefing: what the change does, the trade-off, the alternative that did not
+ship, each with evidence. About eight sentences. Not a pitch. Not a request to
+approve.>
+```
+
+**Generate the section**
+
+1. Read `git diff <BASE>...<BRANCH>` (same cap as §3.3).
+2. Load `show-me` (`Skill` tool, `skill: "show-me"`). Ask it for the smallest
+   views that explain *this* change to a human reviewer, from {mermaid, file
+   tree, call tree, markdown diff}, **at most two**. Never HTML — GitHub and
+   GitLab will not render it in the description.
+3. If `show-me` is missing, do the same by hand: pick at most two of those
+   views. A one-line config change gets a small view, not a sequence diagram.
+   A large diff gets the slice the reviewer needs, not a map of the repo.
+   Never skip silently. Never emit HTML. Format:
+   - mermaid → a fenced block with language `mermaid` (flowchart or sequence)
+   - file tree → indented tree; every path in backticks
+   - call tree → indented calls; paths in backticks
+   - markdown diff → a fenced block with language `diff`
+   File paths in every view go in backticks, same as the Changes list.
+4. Write the PR briefing (after the opener). Evidence, not adjectives.
+5. Run `humanizer` on the briefing prose only. Leave the opener, heading,
+   fences, trees, and paths untouched.
+6. Assemble the section in the shape above.
+
+**`apply(body, section) → body`** — this is the seam. Done means the eight
+examples below hold.
+
+```
+on(apply)
+  if body matches section opener (exact sentence)
+    replace the heading block
+      start: the ## What this PR does that precedes the opener with only
+             blank lines in between (the template has one blank line under
+             the heading). Else the opener line.
+      end: next ## heading or EOF
+    return body
+  append section at end
+    if body is non-empty and does not already end in a blank line, insert a separating newline
+    return body
+```
+
+A human-written `## What this PR does` **without** the opener is not a match.
+Leave it. Append the pipeline section at the end.
+
+Never splice after `## Summary`. That heading may not exist.
+
+**Examples (completion criterion for apply):**
+
+1. Empty body → body equals the section.
+2. Default Summary / Changes / Test plan, no opener → section appended after Test plan; those three headings unchanged.
+3. Custom `--body` with no `## Summary` and no opener → section appended; custom prose unchanged.
+4. Body already contains heading + opener + old views → that block replaced; text before the heading unchanged; a later `##` heading unchanged.
+5. Body contains the opener without the heading → replace from the opener line through the next `##` or EOF.
+6. Body contains `## What this PR does` *without* the opener (human-written) → that heading left alone; pipeline section appended at the end.
+7. Apply twice with the same opener → still one section (second call is a replace).
+8. Body ending without a trailing newline → append still inserts a separating blank line before the heading.
+
+**Publish**
+
+- New PR: set `BODY = apply(BODY, section)`, then create with that body (§3.5).
+- Existing PR: fetch the live description, `BODY = apply(BODY, section)`, then:
+
+```bash
+# GitHub
+gh pr edit <PR_NUMBER> --body "$BODY"
+
+# GitLab
+glab mr update <PR_NUMBER> --description "$BODY"
+```
+
+Write the applied section to
+`.pr-autopilot/<PR_NUMBER>/pr-visual.md` every time apply runs.
+
+Print one terminal line: `PR visual section appended` or
+`PR visual section replaced`.
+
+Persist `show_me: true` and `head_sha: <HEAD>` in `state.json` so a later
+Author round can regenerate without re-parsing the prompt.
+
+### 3.5 Create PR
 
 ```bash
 # GitHub
@@ -372,9 +505,10 @@ glab mr create --source-branch "$BRANCH" --target-branch "$BASE" \
 Capture and persist:
 - `PR_NUMBER`
 - `PR_URL`
-- Initialize `.pr-autopilot/<PR_NUMBER>/state.json` with `{iteration: 0, status: "created"}`
+- Initialize `.pr-autopilot/<PR_NUMBER>/state.json` with
+  `{iteration: 0, status: "created", show_me: <bool>, head_sha: "<HEAD>"}`
 
-### 3.5 Post-creation routing
+### 3.6 Post-creation routing
 
 Route by the flags that are on (`--auto` implies `--review`, `--resolve` and
 `--merge`):
@@ -1260,6 +1394,7 @@ Repo root: <CWD>
 You own the whole PR, not just the findings pr-autopilot produced. Make it clean and
 MERGEABLE. Do the parts that apply this round, in this order: (A) inventory + triage
 every comment on the PR, (B) address the findings, (C) merge conflicts, (D) failing CI.
+Do not edit the PR description. The orchestrator owns the PR visual section.
 
 GOLDEN RULE — never silently change a business rule.
 Before you act on a comment, resolve a conflict, or write a CI fix that would alter
@@ -1561,6 +1696,7 @@ verification: pass | fail | partial
 - If `conflict: escalated` or `ci: escalated` → halt and surface exactly what needs a human decision (the Author already consulted `groom-me` where it could). When `ci_triage_comment: not-asked`, print the drafted comment body so the user can post it themselves in one paste. Do **not** merge.
 - Validate: every BLOCKER must have `Action: FIXED` or `REFUTED` in `response-summary.md` — the same value its posted reply carries as `action=` in the trailing marker (§0.3). Any BLOCKER with `DEFERRED`/`SKIPPED` → halt and escalate (this is a guardrail violation). This applies to BLOCKERs inferred from external `CHANGES_REQUESTED` reviews exactly as it does to pr-autopilot's own.
 - If a human left `CHANGES_REQUESTED` and has not re-reviewed, the PR is not mergeable regardless of CI — never merge past a standing human block.
+- **PR visual regenerate.** Only if `--show-me` is on **this run** (`state.json.show_me` was set from that flag in Phase 1, not inherited from an older run) **and** `push_sha` is not `n/a` **and** `git diff <state.head_sha> <push_sha>` is non-empty: fetch the live description, generate a fresh section from the current diff (§3.4), `apply`, update the PR/MR, rewrite `pr-visual.md`, set `head_sha` to `push_sha`, print `PR visual section replaced` (or `appended` if the opener was missing). The orchestrator does this, not the Author. If this run did not pass `--show-me`, or there was no push, or the diff is unchanged, leave the description alone.
 - If everything green → increment iteration counter. Under `--review` (or `--auto`), return to **Phase 2** with iteration N+1; under a `--resolve`-only run, go to **Phase 5**.
 - After `MAX_ITERATIONS` cycles still not APPROVED (or CI still red) → escalate: print summary of remaining BLOCKERs / red checks and ask user how to proceed (extend iterations / abort). Never force a merge past a guardrail.
 
@@ -1646,7 +1782,10 @@ Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `sta
 
 | Situation | Action |
 |-----------|--------|
-| PR already exists | Reuse PR number, skip creation |
+| PR already exists | Reuse PR number, skip creation. If `--show-me`, still run §3.4 on the live description |
+| `--show-me` and `show-me` skill missing | Use the condensed fallback in §3.4. Never skip silently. Never emit HTML |
+| `--show-me` Author round with no push or unchanged diff | Leave the description alone |
+| `--resolve` / `--auto` without `--show-me` | Never write a PR visual section |
 | Working tree dirty | Ask user to commit; do not auto-stash |
 | Push rejected (non-fast-forward) | Stop, ask user — do not force-push |
 | Author agent breaks lint/tests | Halt loop, surface logs |
@@ -1683,7 +1822,8 @@ skip a BLOCKER, and **never** silently change a business rule — `groom-me` fir
 Layout under `.pr-autopilot/<PR_NUMBER>/`:
 
 ```
-state.json                       # {iteration, status, pr_url, platform, started_at}
+state.json                       # {iteration, status, pr_url, platform, started_at, show_me, head_sha}
+pr-visual.md                     # last applied PR visual section (absent when --show-me is off)
 iter-1/review-report.md          # merged findings from code + test tracks
                                  # (absent when --resolve runs without --review)
 iter-1/test-ranker-a.md          # test ranker 1 output (only when tests in diff)
@@ -1744,6 +1884,15 @@ pr-autopilot --draft
 
 # Override base branch
 pr-autopilot --merge --base=develop
+
+# Reviewer briefing on the PR description (opt-in; --auto does not imply this)
+pr-autopilot --show-me
+
+# Briefing on create, regenerate after Author fixes that change the diff
+pr-autopilot --show-me --resolve
+
+# Full hands-off plus the briefing
+pr-autopilot --auto --show-me
 ```
 
 ---
@@ -1755,9 +1904,11 @@ Keep terminal output terse. Per phase, emit one line:
 ```
 [mode] --auto (full hands-off)
 [1/6] PR #482 created → https://github.com/acme/api/pull/482
+[1/6] PR visual section appended
 [2/6] Reviewer iter 1 → CHANGES_REQUESTED (2 BLOCKER, 3 SUGGESTION) — 5 inline comments posted
 [3/6] Author iter 1   → triaged 12 comments (7 actionable, 3 noise, 2 already handled)
 [3/6] Author iter 1   → 2 fixed, 1 deferred, 1 answered, replies posted, pushed abc1234
+[3/6] PR visual section replaced
 [3/6] Author iter 1   → conflict in `pricing.ts` resolved (merged base, groom-me confirmed) def5678
 [2/6] Reviewer iter 2 → APPROVED
 [5/6] CI: waiting… 2/4 pending
