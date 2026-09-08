@@ -340,7 +340,7 @@ Capture `PR_NUMBER` and `PR_URL`. Then:
 - If `--show-me` is on, fetch the live description and run **§3.4** (apply +
   update the existing PR/MR). Do not skip this because create was skipped.
 - Write or update `.pr-autopilot/<PR_NUMBER>/state.json` with
-  `{show_me, head_sha, pr_url, status}`.
+  `{iteration, status, pr_url, show_me, head_sha}`.
 - Then jump to **§3.6** with that PR number. Do not generate a new title/body.
 
 ### 3.3 Title + body generation
