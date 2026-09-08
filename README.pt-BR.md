@@ -10,7 +10,7 @@ Uma [skill do Claude Code](https://docs.claude.com/en/docs/claude-code/skills) q
 
 **Criação → Review → Triagem de todo comentário → Resposta → Re-review → Resolve conflitos & corrige CI → Espera CI → Merge.** Sem intervenção manual.
 
-**Opt-in por padrão.** Todo estágio fica desligado até você pedir. O `pr-autopilot` puro só abre o PR e para. Você liga cada estágio com uma flag (`--review`, `--resolve`, `--merge`) ou liga todos de uma vez com `--auto`.
+**Opt-in por padrão.** Todo estágio fica desligado até você pedir. O `pr-autopilot` puro só abre o PR e para. Você liga cada estágio com uma flag (`--review`, `--resolve`, `--merge`) ou liga todos de uma vez com `--auto`. `--cascade` é um opt-in separado: envia um work item do GitHub como PR contra o trunk. `--auto` não liga isso.
 
 ---
 
@@ -50,6 +50,7 @@ Os estágios ②–⑥ são opt-in. Sem nenhuma flag, a execução termina depoi
 - **Título e descrição automáticos** baseados em commits e diff, seguindo Conventional Commits + Jira.
 - **`--show-me` briefing para o revisor** — opt-in. Anexa uma seção `## What this PR does` na descrição do PR (mermaid / file tree / call tree / diff em markdown, nunca HTML) para o revisor humano ler o que a mudança faz, o trade-off e a alternativa que não entrou, antes do diff. Combinado com `--review`, cada finding do Reviewer também ganha um **comment view** nas mesmas quatro formas, na mesma linha do achado; o marcador de severidade continua por último. Combinado com `--resolve`, cada resposta do Author numa thread que ainda não tem resposta, e um comentário de triagem de CI postado, também ganham exatamente um comment view; threads já tratadas e NOISE ficam sem resposta. `--auto` não liga isso. Uma segunda execução troca a seção em vez de duplicar. Com `--resolve`, a seção regenera depois de um push do Author que de fato mudou o diff. O Author não escreve a seção visual do PR.
 - **`--show-me-comments` operator briefing** — opt-in. Imprime markdown na conversa do harness para cada comentário que já existe no PR: `path:line` quando o comentário é inline, a observação citada, e um **comment view** (mermaid / file tree / call tree / diff em markdown, nunca HTML). Comentários de topo omitem a linha de path. Não é postado no PR. Não é um HTML local. `--auto` não liga isso. Sem `--resolve`, a execução faz o briefing e para (depois do review postado, se `--review` também rodou). Com `--resolve`, o briefing vem depois do inventário e antes do Author mexer no código. `--auto` ou sem TTY grava `.pr-autopilot/<PR>/operator-briefing.md` e continua. Se `show-me` não carregar: o mesmo alerta + `npx skills add FelipeOFF/skills --skill=show-me` do `--show-me`; sem briefing inventado.
+- **`--cascade` work items contra o trunk** — opt-in. Implementa um work item do GitHub desbloqueado e abre um PR contra o trunk (`--base`, ou o default do repo). `--auto` não liga isso. Uma frase como "cascade these tickets" liga. O feature branch atual não é o parent. `ready-for-human` é pulado a menos que o ID tenha sido nomeado. `--title` / `--body` não são carimbados no PR do work item.
 - **Loop de review multi-agente** com achados estruturados: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Author com poder de veto** — pode refutar um BLOCKER incorreto com evidência ao invés de aplicar cegamente.
 - **Escreve como gente, codifica como sênior preguiçoso** — cada palavra postada no PR passa pela [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) e cada linha de código pela [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). Sem carimbo `✅ FIXED`, sem colchete `[BLOCKER]`, sem emoji de abertura: o comentário parece escrito por um colega, e o estado de máquina viaja num marcador HTML invisível. As duas skills também estão reescritas dentro da própria skill, então um harness sem elas se comporta igual.
@@ -136,9 +137,9 @@ cp SKILL.md .claude/skills/pr-autopilot/
 ```
 
 Ao começar a digitar `/pr-autopilot` no Claude Code, as flags disponíveis
-(`--auto`, `--review`, `--resolve`, `--merge`, `--show-me`, `--show-me-comments`, `--unslop`, `--draft`, …) aparecem
+(`--auto`, `--review`, `--resolve`, `--merge`, `--show-me`, `--show-me-comments`, `--unslop`, `--cascade`, `--draft`, …) aparecem
 inline graças ao `argument-hint` declarado no front-matter da skill — mesmo
-padrão usado pelo GSD.
+padrão usado pelo GSD. `--auto` não implica `--cascade`.
 
 ## Workflow de desenvolvimento
 
@@ -170,14 +171,15 @@ Tudo é opt-in — componha as flags que você quiser (cada uma tem default `fal
 | **PR + review** | `/pr-autopilot --review` | Cria o PR, posta o review **inline**, para |
 | **Resolver o que já está lá** | `/pr-autopilot --resolve` | Pula o review da IA. O Author tria todo comentário que já existe no PR — humano e bot — corrige o que é acionável, resolve conflitos, corrige o CI, para antes do merge |
 | **Review + resolve** | `/pr-autopilot --review --resolve` | Cria o PR, posta o review inline, e o Author **sempre** roda — mesmo se esse review for APPROVED — nesse review *mais* todo o resto do PR, loop, para antes do merge (adicione `--merge` para dar merge) |
-| **Auto (totalmente hands-off)** | `/pr-autopilot --auto` | Tudo ligado, nunca pergunta. Resolve conflitos e corrige o CI. Espera **todos** os checks de CI. Só faz merge quando tudo está verde. Aborta ou escala em qualquer guardrail. |
+| **Auto (totalmente hands-off)** | `/pr-autopilot --auto` | Tudo ligado, nunca pergunta. Resolve conflitos e corrige o CI. Espera **todos** os checks de CI. Só faz merge quando tudo está verde. Aborta ou escala em qualquer guardrail. **Não** liga `--cascade`. |
+| **Cascade** | `/pr-autopilot --cascade` | Um work item do GitHub desbloqueado como PR contra o trunk. O feature branch atual não é o parent. `--auto` não liga isso. |
 
 Observações:
 
 - `--resolve` é independente de `--review`. Sozinha, trabalha o feedback que o PR já tem sem acrescentar um review próprio — é o modo para um PR que um humano já revisou. Combinada com `--review`, o Author ainda roda depois de um veredito APPROVED (inventário, checagem de conflito, atribuição de CI). Um quiet pass ainda imprime `conflict: none` e `CI: green`.
 - `--merge` é o que habilita o merge; sem ele (ou `--auto`) a execução sempre para antes do merge.
 - `--auto` é abreviação para `--review --resolve --merge` mais "nunca me pergunte nada" — mas nunca relaxa um guardrail: testes falhando, um conflito em regra de negócio, um BLOCKER aberto ou um check vermelho abortam ou escalam.
-- `--auto` **não** liga `--show-me`, `--unslop` nem `--show-me-comments`. Essas continuam opt-in.
+- `--auto` **não** liga `--show-me`, `--unslop`, `--show-me-comments` nem `--cascade`. Essas continuam opt-in. Uma frase como "cascade these tickets" liga `--cascade`; `--auto` não liga.
 - Não perguntar significa não ter consentimento. O que exige o seu sim explícito — mudar uma regra de negócio, ou comentar que o CI está vermelho por causa alheia ao PR — vira `escalated` no `--auto`, nunca é feito em silêncio.
 
 ## Uso
@@ -247,6 +249,15 @@ De qualquer branch com commits para enviar:
 
 # Hands-off total mais unslop em toda prosa postada que o auto já escreve
 /pr-autopilot --auto --unslop
+
+# Um work item do GitHub desbloqueado como PR contra o trunk
+# (--auto não implica isso)
+/pr-autopilot --cascade
+
+# A mesma flag via frase: cascade these tickets
+
+# Compõe review / visual / draft nesse PR (ainda sem merge)
+/pr-autopilot --cascade --review --show-me --draft
 ```
 
 ### Flags
@@ -255,17 +266,18 @@ Toda flag booleana tem default `false` — passe-a (pura, ou `=true`) para ligar
 
 | Flag | Padrão | Descrição |
 |------|--------|-----------|
-| `--auto` | `false` | Hands-off total: liga `--review`, `--resolve`, `--merge`, nunca pergunta, resolve conflitos + corrige CI. |
+| `--auto` | `false` | Hands-off total: liga `--review`, `--resolve`, `--merge`, nunca pergunta, resolve conflitos + corrige CI. **Não** liga `--show-me` nem `--cascade`. |
 | `--review` | `false` | Roda o subagente Reviewer (comentários inline) |
 | `--resolve` | `false` | Roda o subagente Author — sempre, mesmo quando o Reviewer aprovou. Tria todo comentário que já existe no PR (humano e bot), corrige o que é acionável, resolve conflitos, corrige CI. **Não** implica `--review`. |
-| `--merge` | `false` | Habilita o auto-merge no CI verde + `MERGEABLE`. Sem ela a execução para antes do merge. |
+| `--merge` | `false` | Habilita o auto-merge no CI verde + `MERGEABLE`. Sem ela a execução para antes do merge. `--cascade` não liga isso. |
 | `--max-iterations` | `2` | Máximo de ciclos review→resposta (e correção de CI) |
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
-| `--base` | auto | Branch alvo |
+| `--base` | auto | Branch alvo. Sob `--cascade`, é o trunk que o PR raiz aponta. |
 | `--draft` | `false` | Abre como draft (força sem merge) |
 | `--show-me` | `false` | Anexa (ou troca) um briefing para o revisor na descrição do PR. Combinado com `--review`, também coloca um comment view em cada finding do Reviewer. Combinado com `--resolve`, também coloca um comment view em cada reply do Author ainda sem resposta e num comentário de triagem de CI postado. `--auto` não liga. |
 | `--show-me-comments` | `false` | Imprime um operator briefing dos comentários que já existem no PR (observação citada + um comment view; `path:line` quando inline). Não é postado. `--auto` não liga. |
 | `--unslop` | `false` | Depois do humanizer, passa a prosa postada pelo unslop na voz de quem invocou. `--auto` não liga. |
+| `--cascade` | `false` | Envia um work item do GitHub desbloqueado como PR contra o trunk. `--auto` não implica. Uma frase como "cascade these tickets" liga. |
 | `--ci-timeout` | `1800` | Segundos antes de desistir do CI |
 | `--ci-poll-interval` | `30` | Intervalo entre polls |
 
