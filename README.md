@@ -169,12 +169,12 @@ Everything is opt-in — compose the flags you want (each defaults to `false`):
 | **PR + merge** | `/pr-autopilot --merge` | Creates PR, waits for CI, merges. No review. |
 | **PR + review** | `/pr-autopilot --review` | Creates PR, posts **inline** review comments, stops |
 | **Resolve what's already there** | `/pr-autopilot --resolve` | Skips the AI review. The Author triages every comment already on the PR — human and bot — fixes what's actionable, resolves conflicts, fixes CI, stops before merge |
-| **Review + resolve** | `/pr-autopilot --review --resolve` | Creates PR, posts an inline review, then the Author resolves that review *plus* everything else on the PR, loops, stops before merge (add `--merge` to merge) |
+| **Review + resolve** | `/pr-autopilot --review --resolve` | Creates PR, posts an inline review, then the Author **always** runs — even if that review is APPROVED — on that review *plus* everything else on the PR, loops, stops before merge (add `--merge` to merge) |
 | **Auto (full hands-off)** | `/pr-autopilot --auto` | Everything on, never prompts. Resolves conflicts and fixes CI. Waits for **all** CI checks. Merges only when everything is green. Halts or escalates on any guardrail. |
 
 Notes:
 
-- `--resolve` is independent of `--review`. Alone, it works the feedback the PR already has without adding a review of its own — that's the mode for a PR a human already reviewed.
+- `--resolve` is independent of `--review`. Alone, it works the feedback the PR already has without adding a review of its own — that's the mode for a PR a human already reviewed. Combined with `--review`, the Author still runs after an APPROVED verdict (inventory, conflict check, CI attribution). A quiet pass still prints `conflict: none` and `CI: green`.
 - `--merge` is what enables the merge; without it (or `--auto`) the run always stops before merging.
 - `--auto` is shorthand for `--review --resolve --merge` plus "never ask me anything" — but it never relaxes a guardrail: failing tests, a business-rule conflict, an open BLOCKER, or a red check all halt or escalate.
 - `--auto` does **not** turn on `--show-me`, `--unslop`, or `--show-me-comments`. Those stay opt-in.
@@ -257,7 +257,7 @@ Every boolean flag defaults to `false` — pass it (bare, or `=true`) to turn th
 |------|---------|-------------|
 | `--auto` | `false` | Full hands-off: turns on `--review`, `--resolve`, `--merge`, never prompts, resolves conflicts + fixes CI. |
 | `--review` | `false` | Run the Reviewer subagent (inline comments) |
-| `--resolve` | `false` | Run the Author subagent — triages every comment already on the PR (human and bot), fixes what's actionable, resolves conflicts, fixes CI. Does **not** imply `--review`. |
+| `--resolve` | `false` | Run the Author subagent — always, even when the Reviewer approved. Triages every comment already on the PR (human and bot), fixes what's actionable, resolves conflicts, fixes CI. Does **not** imply `--review`. |
 | `--merge` | `false` | Enable auto-merge on green CI + `MERGEABLE`. Without it the run stops before merge. |
 | `--max-iterations` | `2` | Max review→respond (and CI-fix) cycles |
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
@@ -340,7 +340,12 @@ See [SECURITY.md](./SECURITY.md) for the full threat model and how to report iss
 [3/6] Author iter 1   → 2 fixed, 1 deferred, 1 answered, replies posted, pushed abc1234
 [3/6] PR visual section replaced
 [3/6] Author iter 1   → conflict in pricing.ts resolved (merged base, groom-me confirmed) def5678
+[3/6] conflict: resolved
+[3/6] CI: not-run
 [2/6] Reviewer iter 2 → APPROVED
+[3/6] Author iter 2   → triaged 12 comments (0 actionable, 3 noise, 9 already handled)
+[3/6] conflict: none
+[3/6] CI: green
 [5/6] CI: waiting… 2/4 pending
 [5/6] CI: unit failed → attributed to this PR → flaky assert corrected, pushed 9ab0cd1
 [5/6] CI: e2e failed → attributed to main (fails at 77f2a1c too) → asked, comment posted
@@ -348,7 +353,7 @@ See [SECURITY.md](./SECURITY.md) for the full threat model and how to report iss
 [6/6] Merged (squash) → main @ ef01234
 ```
 
-The `[mode]` line reflects the flags you passed — `PR only (no flags)`, `--merge`, `--review`, `--resolve`, or `--auto`. Stages that don't run for your mode are simply absent.
+The `[mode]` line reflects the flags you passed — `PR only (no flags)`, `--merge`, `--review`, `--resolve`, `--show-me-comments`, `--unslop`, or `--auto`. Stages that don't run for your mode are simply absent — except the `conflict:` and `CI:` lines, which are never absent when `--resolve` ran.
 
 ## Contributing
 

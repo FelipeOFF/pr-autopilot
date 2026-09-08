@@ -44,7 +44,8 @@ _Avoid_: Reviewer (that word already names the Reviewer agent in the pipeline)
 Opt-in flag. Generate the PR visual section at create, and regenerate it after
 an Author push that changed the diff. Off by default; `--auto` does not turn
 it on. Combined with `--review`, every Reviewer finding also gets a comment
-view.
+view. Combined with `--resolve`, every Author reply on a thread that still
+has no reply, and a posted CI triage comment, also get one comment view.
 
 **`--show-me-comments`**:
 Opt-in flag. Print an operator briefing of comments already on the PR.

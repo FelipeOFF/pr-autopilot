@@ -242,13 +242,19 @@ on(posted)
       alert + npx install line
       # prose stays humanizer-only; do not fake unslop
   if kind in {finding, reply, ci-triage}
-    if kind in {reply, ci-triage} and --show-me and show-me skill loaded this run
-      view = exactly one of {mermaid, file tree, call tree, markdown diff}
+    if --show-me and show-me skill loaded this run
+      if kind == finding and --review
+        view = exactly one of {mermaid, file tree, call tree, markdown diff}
+      else if kind in {reply, ci-triage} and --resolve
+        view = exactly one of {mermaid, file tree, call tree, markdown diff}
+      else
+        view = none
     else
-      view = none   # findings: view is added in posted_finding (§4.3)
+      view = none
     return prose + (blank line + view if any) + marker alone on last line
     # --show-me on and skill missing: same alert as §4.3 / §5.8; do not invent
     # a view; post prose + marker; pipeline continues. Never HTML.
+    # if a draft carries more than one view, keep the first, drop the rest
   return prose
 ```
 
@@ -269,6 +275,7 @@ on(posted)
 13. `--resolve` without `--show-me`, kind=`reply` → prose + marker, no view.
 14. `--show-me --resolve` and show-me loaded, kind=`ci-triage` → exactly one view; `<!-- pr-autopilot:ci-triage:<check-name> -->` last line.
 15. `--show-me` on, skill missing, kind=`reply` or `ci-triage` → alert + npx; posted without view, no HTML.
+16. `--review --resolve --show-me --unslop`, skill present → PR visual section + one comment view on each finding and unreplied reply (and a posted CI triage comment) + unslop on that posted prose. One `posted()` call per surface; do not run humanizer twice.
 
 ---
 
@@ -766,9 +773,11 @@ position is top-level.
 
 When `--resolve` is on and
 `.pr-autopilot/<PR_NUMBER>/iter-<N>/pr-feedback.md` already exists this
-iteration, use its `path:line` and `quote` fields instead of re-fetching.
-Prefer that file so the briefing sits after inventory and before the Author
-touches code.
+iteration, use its `path:line` and `quote` fields for CRITIQUE and QUESTION
+entries. **Do not skip NOISE.** A collapsed noise count in the inventory is
+not a briefing block — fall back to the fetch for those comments so every
+comment already on the PR still gets quote + one view. Prefer the inventory
+file for timing (after inventory, before code), not as a filter.
 
 **Missing `show-me` skill.** If `--show-me-comments` is on and the Skill tool
 cannot load `show-me`: print an alert that names `show-me` and the install
@@ -787,7 +796,7 @@ on(brief)
     alert + npx install line (once per run)
     return nothing          # do not fake views
   blocks = []
-  for each comment already on the PR
+  for each comment already on the PR   # including NOISE; never skip a comment
     quote = visible remark (strip a trailing <!-- pr-autopilot:... --> marker)
     view  = exactly one of {mermaid, file tree, call tree, markdown diff}
     if comment is inline (has path and line)
@@ -850,6 +859,7 @@ cart.ts
 8. `--auto` without `--show-me-comments` → no operator briefing.
 9. `brief()` output is never posted to the PR. Never HTML.
 10. `state.json.show_me_comments` is whether the flag is on **this invocation** (do not inherit `true`).
+11. A NOISE comment (LGTM, emoji) still gets a briefing block (quote + one view). The Author does not reply to it.
 
 ---
 
@@ -1071,23 +1081,12 @@ as prose + marker. Continue the rest of the pipeline (PR created, review posted,
 resolve if that flag is on). The PR visual section still uses the condensed
 fallback in §3.4.
 
-**`posted(finding) → body`** — this is the seam. Done means the examples below hold.
+**`posted(finding) → body`** — same seam as §0.4, `kind=finding`. Done means
+the examples below hold. Do not run humanizer or unslop a second time.
 
 ```
 on(posted_finding)
-  prose = humanizer(draft)
-  if --unslop and unslop skill loaded this run
-    prose = unslop(prose, soul)
-  if --show-me and --review and show-me skill loaded this run
-    view = exactly one of {mermaid, file tree, call tree, markdown diff}
-  else
-    view = none
-  body = prose
-         + (blank line + view if any)
-         + marker alone on last line
-  never HTML
-  never rewrite marker, fences, trees, diffs, paths, SHAs
-  if a draft carries more than one view, keep the first, drop the rest
+  return posted(finding, draft, flags)   # §0.4: humanizer, unslop, view, marker
 ```
 
 Format of a view (same as §3.4, one of):
@@ -1155,9 +1154,9 @@ gh api -X POST "repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews" \
 
 For a multi-line comment, use `start_line` + `start_side` + `line` + `side` instead of just `line`.
 
-Every inline comment body is `posted(finding, …)` (§0.4) then **posted()**
-(§4.3): humanized, then unslopped when `--unslop` is on, optionally one comment
-view when `--show-me` is on and `show-me` loaded, opening the way a reviewer
+Every inline comment body is **one** `posted(finding, …)` call (§0.4 / §4.3):
+humanized, then unslopped when `--unslop` is on, optionally one comment view
+when `--show-me` is on and `show-me` loaded, opening the way a reviewer
 speaks (`Blocking:` / `Suggestion:` / `nit:`), and **must** end with exactly one
 severity marker alone on its last line:
 `<!-- pr-autopilot:severity=blocker|suggestion|nitpick -->`. Never unslop the
@@ -1422,8 +1421,8 @@ After both tracks complete (or after the code track alone when no tests are in t
    - Set `verdict: CHANGES_REQUESTED` if any BLOCKER, else `APPROVED`
    - Add `test_track: ran` or `test_track: skipped — no tests in diff`
 6. **Append test-track findings** to the "## Inline findings" section of `review-report.md`, preserving the structured format.
-7. **Run posted() (§4.3) on every finding** before the host POST. That is the
-   body that goes to GitHub/GitLab:
+7. **Run `posted(finding, …)` once (§0.4 / §4.3)** before the host POST. That
+   is the body that goes to GitHub/GitLab. Do not run humanizer again:
    - `--review` without `--show-me` → prose + marker, no comment view (strip a
      view if a confused Reviewer included one)
    - `--show-me --review` and `show-me` loaded → exactly one comment view;
@@ -2384,24 +2383,13 @@ as §3.4 / §4.3). Do not emit HTML. Do not silently invent comment views.
 Post the reply or CI triage as prose + marker. Continue the rest of the
 pipeline. The PR visual section still uses the condensed fallback in §3.4.
 
-**`posted(reply) → body`** and **`posted(ci-triage) → body`** — this is the
-seam. Done means the examples below hold.
+**`posted(reply) → body`** and **`posted(ci-triage) → body`** — same seam as
+§0.4. Done means the examples below hold. Do not run humanizer or unslop a
+second time.
 
 ```
 on(posted_reply)   # same for posted_ci_triage
-  prose = humanizer(draft)
-  if --unslop and unslop skill loaded this run
-    prose = unslop(prose, soul)
-  if --show-me and --resolve and show-me skill loaded this run
-    view = exactly one of {mermaid, file tree, call tree, markdown diff}
-  else
-    view = none
-  body = prose
-         + (blank line + view if any)
-         + marker alone on last line
-  never HTML
-  never rewrite marker, fences, trees, diffs, paths, SHAs
-  if a draft carries more than one view, keep the first, drop the rest
+  return posted(kind, draft, flags)   # §0.4: humanizer, unslop, view, marker
   never rewrite the PR description
 ```
 

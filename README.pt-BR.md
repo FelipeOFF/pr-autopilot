@@ -169,12 +169,12 @@ Tudo é opt-in — componha as flags que você quiser (cada uma tem default `fal
 | **PR + merge** | `/pr-autopilot --merge` | Cria o PR, espera o CI, dá merge. Sem review. |
 | **PR + review** | `/pr-autopilot --review` | Cria o PR, posta o review **inline**, para |
 | **Resolver o que já está lá** | `/pr-autopilot --resolve` | Pula o review da IA. O Author tria todo comentário que já existe no PR — humano e bot — corrige o que é acionável, resolve conflitos, corrige o CI, para antes do merge |
-| **Review + resolve** | `/pr-autopilot --review --resolve` | Cria o PR, posta o review inline, e o Author resolve esse review *mais* todo o resto do PR, loop, para antes do merge (adicione `--merge` para dar merge) |
+| **Review + resolve** | `/pr-autopilot --review --resolve` | Cria o PR, posta o review inline, e o Author **sempre** roda — mesmo se esse review for APPROVED — nesse review *mais* todo o resto do PR, loop, para antes do merge (adicione `--merge` para dar merge) |
 | **Auto (totalmente hands-off)** | `/pr-autopilot --auto` | Tudo ligado, nunca pergunta. Resolve conflitos e corrige o CI. Espera **todos** os checks de CI. Só faz merge quando tudo está verde. Aborta ou escala em qualquer guardrail. |
 
 Observações:
 
-- `--resolve` é independente de `--review`. Sozinha, trabalha o feedback que o PR já tem sem acrescentar um review próprio — é o modo para um PR que um humano já revisou.
+- `--resolve` é independente de `--review`. Sozinha, trabalha o feedback que o PR já tem sem acrescentar um review próprio — é o modo para um PR que um humano já revisou. Combinada com `--review`, o Author ainda roda depois de um veredito APPROVED (inventário, checagem de conflito, atribuição de CI). Um quiet pass ainda imprime `conflict: none` e `CI: green`.
 - `--merge` é o que habilita o merge; sem ele (ou `--auto`) a execução sempre para antes do merge.
 - `--auto` é abreviação para `--review --resolve --merge` mais "nunca me pergunte nada" — mas nunca relaxa um guardrail: testes falhando, um conflito em regra de negócio, um BLOCKER aberto ou um check vermelho abortam ou escalam.
 - `--auto` **não** liga `--show-me`, `--unslop` nem `--show-me-comments`. Essas continuam opt-in.
@@ -257,7 +257,7 @@ Toda flag booleana tem default `false` — passe-a (pura, ou `=true`) para ligar
 |------|--------|-----------|
 | `--auto` | `false` | Hands-off total: liga `--review`, `--resolve`, `--merge`, nunca pergunta, resolve conflitos + corrige CI. |
 | `--review` | `false` | Roda o subagente Reviewer (comentários inline) |
-| `--resolve` | `false` | Roda o subagente Author — tria todo comentário que já existe no PR (humano e bot), corrige o que é acionável, resolve conflitos, corrige CI. **Não** implica `--review`. |
+| `--resolve` | `false` | Roda o subagente Author — sempre, mesmo quando o Reviewer aprovou. Tria todo comentário que já existe no PR (humano e bot), corrige o que é acionável, resolve conflitos, corrige CI. **Não** implica `--review`. |
 | `--merge` | `false` | Habilita o auto-merge no CI verde + `MERGEABLE`. Sem ela a execução para antes do merge. |
 | `--max-iterations` | `2` | Máximo de ciclos review→resposta (e correção de CI) |
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
@@ -340,7 +340,12 @@ Modelo de ameaças completo e canal de reporte: veja [SECURITY.md](./SECURITY.md
 [3/6] Author iter 1   → 2 corrigidos, 1 adiado, 1 respondido, respostas postadas, push abc1234
 [3/6] PR visual section replaced
 [3/6] Author iter 1   → conflito em pricing.ts resolvido (merge da base, groom-me confirmou) def5678
+[3/6] conflict: resolved
+[3/6] CI: not-run
 [2/6] Reviewer iter 2 → APPROVED
+[3/6] Author iter 2   → 12 comentários triados (0 acionáveis, 3 ruído, 9 já tratados)
+[3/6] conflict: none
+[3/6] CI: green
 [5/6] CI: aguardando… 2/4 pendentes
 [5/6] CI: unit falhou → atribuído a este PR → assert flaky corrigido, push 9ab0cd1
 [5/6] CI: e2e falhou → atribuído à main (falha em 77f2a1c também) → perguntou, comentário postado
@@ -348,7 +353,7 @@ Modelo de ameaças completo e canal de reporte: veja [SECURITY.md](./SECURITY.md
 [6/6] Merge (squash) → main @ ef01234
 ```
 
-A linha `[mode]` reflete as flags que você passou — `Só PR (sem flags)`, `--merge`, `--review`, `--resolve` ou `--auto`. Os estágios que não rodam no seu modo simplesmente não aparecem.
+A linha `[mode]` reflete as flags que você passou — `Só PR (sem flags)`, `--merge`, `--review`, `--resolve`, `--show-me-comments`, `--unslop` ou `--auto`. Os estágios que não rodam no seu modo simplesmente não aparecem — exceto as linhas `conflict:` e `CI:`, que nunca faltam quando `--resolve` rodou.
 
 ## Contribuindo
 
