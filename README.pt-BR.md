@@ -46,6 +46,7 @@ Os estágios ②–⑥ são opt-in. Sem nenhuma flag, a execução termina depoi
 
 - **Estágios opt-in** — toda flag tem default `false`. O `pr-autopilot` puro abre o PR e para; você liga review, resolve e merge conforme precisar.
 - **Título e descrição automáticos** baseados em commits e diff, seguindo Conventional Commits + Jira.
+- **`--show-me` briefing para o revisor** — opt-in. Anexa uma seção `## What this PR does` na descrição do PR (mermaid / file tree / call tree / diff em markdown, nunca HTML) para o revisor humano ler o que a mudança faz, o trade-off e a alternativa que não entrou, antes do diff. `--auto` não liga isso. Uma segunda execução troca a seção em vez de duplicar. Com `--resolve`, a seção regenera depois de um push do Author que de fato mudou o diff.
 - **Loop de review multi-agente** com achados estruturados: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Author com poder de veto** — pode refutar um BLOCKER incorreto com evidência ao invés de aplicar cegamente.
 - **Escreve como gente, codifica como sênior preguiçoso** — cada palavra postada no PR passa pela [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) e cada linha de código pela [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). Sem carimbo `✅ FIXED`, sem colchete `[BLOCKER]`, sem emoji de abertura: o comentário parece escrito por um colega, e o estado de máquina viaja num marcador HTML invisível. As duas skills também estão reescritas dentro da própria skill, então um harness sem elas se comporta igual.
@@ -206,6 +207,12 @@ De qualquer branch com commits para enviar:
 
 # PR como draft (apenas criação)
 /pr-autopilot --draft
+
+# Briefing para o revisor na descrição (--auto não implica isso)
+/pr-autopilot --show-me
+
+# Briefing na criação; regenera depois de fixes do Author que mudam o diff
+/pr-autopilot --show-me --resolve
 ```
 
 ### Flags
@@ -222,6 +229,7 @@ Toda flag booleana tem default `false` — passe-a (pura, ou `=true`) para ligar
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
 | `--base` | auto | Branch alvo |
 | `--draft` | `false` | Abre como draft (força sem merge) |
+| `--show-me` | `false` | Anexa (ou troca) um briefing para o revisor na descrição do PR. `--auto` não liga. |
 | `--ci-timeout` | `1800` | Segundos antes de desistir do CI |
 | `--ci-poll-interval` | `30` | Intervalo entre polls |
 
@@ -289,9 +297,11 @@ Modelo de ameaças completo e canal de reporte: veja [SECURITY.md](./SECURITY.md
 ```
 [mode] --auto (hands-off total)
 [1/6] PR #482 criado → https://github.com/acme/api/pull/482
+[1/6] PR visual section appended
 [2/6] Reviewer iter 1 → CHANGES_REQUESTED (2 BLOCKER, 3 SUGGESTION) — 5 comentários inline postados
 [3/6] Author iter 1   → 12 comentários triados (7 acionáveis, 3 ruído, 2 já tratados)
 [3/6] Author iter 1   → 2 corrigidos, 1 adiado, 1 respondido, respostas postadas, push abc1234
+[3/6] PR visual section replaced
 [3/6] Author iter 1   → conflito em pricing.ts resolvido (merge da base, groom-me confirmou) def5678
 [2/6] Reviewer iter 2 → APPROVED
 [5/6] CI: aguardando… 2/4 pendentes
