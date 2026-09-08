@@ -1,7 +1,8 @@
 # pr-autopilot
 
-A skill that opens, reviews, and merges a pull request. This glossary is the
-language of that pipeline, not a spec.
+A skill that opens, reviews, and merges a pull request — or, with
+`--cascade`, a forest of stacked PRs. This glossary is the language of
+that pipeline, not a spec.
 
 ## Language
 
@@ -44,3 +45,59 @@ _Avoid_: Reviewer (that word already names the Reviewer agent in the pipeline)
 Opt-in flag. Generate the PR visual section at create, and regenerate it after
 an Author push that changed the diff. Off by default; `--auto` does not turn
 it on.
+
+## Cascade
+
+**`--cascade`**:
+Opt-in flag. A forest of stacked PRs from work items, or a walk of an
+existing chain to the trunk. `--auto` does not turn it on. A phrase like
+"cascade these tickets" is the same flag.
+_Avoid_: implied by --auto, cascade-flow --full, panorama dashboard
+
+**Work item**:
+An implementable node on the tracker: a GitHub or GitLab issue, a bead, or
+a Jira issue, labelled ready-for-agent, with a parent or a task type.
+_Avoid_: spec, epic, card, ready-for-human, HITL
+
+**Trunk**:
+The long-lived branch the root PR targets. Named by `--base`. Omitted
+`--base` is the repo default branch.
+_Avoid_: parent PR head, GitHub base of a child
+
+**Forest**:
+The work-item DAG. Roots target the trunk. A child stacks only when the
+graph records a blocker.
+_Avoid_: forced line by ticket number, one PR for the whole spec
+
+**Graph mode**:
+`--cascade` when the prompt has work-item IDs or "these tickets". Cuts
+from the trunk, or from the parent's head once that PR exists. Ignores
+the current branch.
+_Avoid_: stacking on the current feature branch
+
+**Existing-chain mode**:
+`--cascade` with no IDs when the current PR's base is not the trunk. The
+path from the trunk to that PR.
+_Avoid_: whole connected component, sibling PRs
+
+**Stacked PR**:
+A PR whose merge target is another PR's head, not the trunk.
+_Avoid_: one fat PR against the trunk that contains two features
+
+**Chain**:
+One root-to-leaf path of stacked PRs. Merge order is root first.
+_Avoid_: forest, panorama --full
+
+**Root**:
+A PR in the forest whose base is the trunk.
+_Avoid_: the trunk itself
+
+**Dangling child**:
+A stacked PR whose parent has merged and whose base is still the
+parent's old head.
+_Avoid_: live stacked PR
+
+**Source**:
+The tracker this repo, or the IDs in the prompt, names: GitHub, GitLab,
+beads, or Jira. A globally installed MCP is not a source.
+_Avoid_: Linear, Asana, mixed graphs, MCP-as-detection
