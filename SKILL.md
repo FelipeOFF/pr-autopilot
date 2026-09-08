@@ -155,13 +155,14 @@ on at once with `--auto`.
 | **PR + merge** | `--merge` | Phase 1 → Phase 5 (CI) → Phase 6 (merge). No review. |
 | **PR + review** | `--review` | Phase 1 → Phase 2 (Reviewer posts inline comments) → STOP. |
 | **Resolve what's already there** | `--resolve` | Phase 1 → **Phase 3** (`Trigger=pr-feedback`): the Author triages every comment already on the PR — human or bot — resolves conflicts and fixes CI → Phase 5 → STOP before merge. **No new AI review is posted.** |
-| **Review + resolve** | `--review --resolve` | Phase 1 → Phase 2 → Phase 3 → loop → STOP before merge. Add `--merge` to merge on green CI. |
+| **Review + resolve** | `--review --resolve` | Phase 1 → Phase 2 → Phase 3 (always, even on APPROVED) → loop → STOP before merge. Add `--merge` to merge on green CI. |
 | **Auto (full hands-off)** | `--auto` | Everything on: review + resolve + wait ALL CI + merge, no prompts. Resolves merge conflicts and fixes failing CI along the way. Halts or escalates only on a guardrail it must not cross. |
 
 Rules that tie the flags together:
 
 - `--resolve` is **independent of** `--review`. On its own it runs the Author against the feedback the PR already has — teammates' comments, Copilot/CodeRabbit/Sonar findings, merge conflicts, red CI — without posting a review of its own. That is the mode for a PR a human already reviewed.
-- `--review --resolve` (and `--auto`) keeps the old behavior: pr-autopilot reviews first, then the Author resolves that review *plus* everything else already on the PR.
+- With `--resolve` or `--auto`, Phase 3 **always** runs after Phase 2, including when `verdict: APPROVED` and `blocker_count: 0`. That Author round still inventories comments already on the PR, checks conflicts, and attributes CI. `--review` without `--resolve` still stops after Phase 2.
+- `--review --resolve` (and `--auto`) reviews first, then the Author resolves that review *plus* everything else already on the PR — and still runs when the Reviewer approved.
 - `--merge` is what enables the merge. Without it (and without `--auto`), the pipeline always stops before merging, no matter how green CI is.
 - `--auto` is shorthand for `--review --resolve --merge` plus a "never prompt for confirmation" semantic **and** the aggressive-resolution behavior: in `--auto` (and any `--resolve`) run, the Author resolves merge conflicts and fixes failing CI, not just review comments.
 - `--auto` does **not** turn on `--show-me`. The PR visual section is a separate opt-in.
@@ -179,7 +180,7 @@ required check green AND the PR is `MERGEABLE`.
 |------|---------|-------------|
 | `--auto` | `false` | Full hands-off. Turns on `--review`, `--resolve`, `--merge`, disables prompts, and lets the Author resolve conflicts + fix CI. |
 | `--review` | `false` | Run the Reviewer subagent (inline comments). |
-| `--resolve` | `false` | Run the Author subagent — triages every comment already on the PR (human and bot), addresses the actionable ones, resolves merge conflicts, and fixes failing CI. Does **not** imply `--review`; combine them to also post a fresh review first. |
+| `--resolve` | `false` | Run the Author subagent — always, even when the Reviewer approved. Triages every comment already on the PR (human and bot), addresses the actionable ones, checks (and resolves) merge conflicts, attributes CI and fixes a failure this PR caused. Does **not** imply `--review`; combine them to also post a fresh review first. |
 | `--merge` | `false` | Enable auto-merge once every required check is green and the PR is `MERGEABLE`. Without it (or `--auto`) the pipeline stops before merge. |
 | `--max-iterations` | `2` | Max review→respond (and CI-fix) cycles before escalating to the user. |
 | `--merge-strategy` | `squash` | One of `squash`, `merge`, `rebase`. |
@@ -215,8 +216,9 @@ pr-autopilot
    │                        (human + bot) + conflicts + CI → wait CI
    │                        → STOP before merge. No new review posted.
    │
-   └─ --review --resolve ► PR → inline review → Author resolves that review
-                            AND everything else on the PR → STOP before merge
+   └─ --review --resolve ► PR → inline review → Author always runs
+                            (even if APPROVED) on that review AND everything
+                            else on the PR → STOP before merge
                             (add --merge to merge on green CI)
 ```
 
@@ -225,7 +227,7 @@ Invocation examples:
 - `pr-autopilot --merge` → create PR + auto-merge on green CI (no review)
 - `pr-autopilot --review` → create PR, post inline review, stop
 - `pr-autopilot --resolve` → Author works the feedback the PR already has (no new review), stop before merge
-- `pr-autopilot --review --resolve` → post a review, then resolve it plus everything else
+- `pr-autopilot --review --resolve` → post a review, then Author runs even if APPROVED
 - `pr-autopilot --resolve --merge` → resolve existing feedback + merge on green CI
 - `pr-autopilot --auto` → full hands-off; merges only when CI is green
 - `pr-autopilot --auto --merge-strategy=rebase --max-iterations=3`
@@ -259,9 +261,10 @@ create the PR and stop.
 │      │    Orchestrator merges findings → posts one review       │
 │      ▼                                                          │
 │  Phase 3: Author subagent (Task)    ──► pr-feedback.md          │
+│      │     ALWAYS when --resolve/--auto, including APPROVED     │
 │      │     triages EVERY comment on the PR — human and bot ──►  │
-│      │     fixes them, resolves merge conflicts,   response-    │
-│      │     attributes and fixes failing CI,        summary.md   │
+│      │     fixes them, checks merge conflicts,     response-    │
+│      │     attributes CI (never patches external), summary.md   │
 │      │     commits, pushes                                      │
 │      │     (business rules → groom-me; CI that isn't the PR's   │
 │      │      fault → ask the dev before commenting)              │
@@ -285,13 +288,17 @@ style (§0): the Reviewer and the Author each invoke `humanizer` for prose and
 `ponytail` for code, and behave the same way when neither skill is installed in
 their harness.
 
-Phase 3 only runs under `--resolve`/`--auto`. When it runs, the Author's job is
-the whole PR: it triages every comment already on it (teammates, Copilot,
-CodeRabbit, Sonar — inline and top-level), resolves merge conflicts, and fixes red
-CI. It escalates to the user (via the `groom-me` skill) whenever a change would
-touch a business rule, and asks before claiming on the PR that a red check is
-someone else's problem. Phase 2 is skipped entirely when `--resolve` runs without
-`--review`. Phase 6 only runs under `--merge`/`--auto`.
+Phase 3 only runs under `--resolve`/`--auto`, and when those flags are on it
+**always** runs after Phase 2 — including when the Reviewer verdict is APPROVED.
+Do not jump to Phase 5 on APPROVED: that skips inventory, the conflict check, and
+CI attribution. When Phase 3 runs, the Author's job is the whole PR: it triages
+every comment already on it (teammates, Copilot, CodeRabbit, Sonar — inline and
+top-level), checks merge conflicts, and attributes CI (fixing a failure this PR
+caused; never patching around external CI). It escalates to the user (via the
+`groom-me` skill) whenever a change would touch a business rule, and asks before
+claiming on the PR that a red check is someone else's problem. Phase 2 is skipped
+entirely when `--resolve` runs without `--review`. Phase 6 only runs under
+`--merge`/`--auto`.
 
 ---
 
@@ -976,22 +983,58 @@ The result: one `review-report.md` with findings from both tracks, and one poste
 
 ### 4.7 Orchestrator post-processing
 
-After both tracks complete and the consolidated review is posted (§4.6), parse the merged front-matter of `review-report.md`:
+After both tracks complete and the consolidated review is posted (§4.6), parse the
+merged front-matter of `review-report.md` and **route**. `--resolve`/`--auto` does
+not skip the Author when the Reviewer approved.
 
-- `verdict: APPROVED` and `blocker_count: 0`:
-  - `--resolve`/`--merge`/`--auto` on → jump to **Phase 5** (CI). Under `--resolve`/`--auto`, a red check loops back to the Author to fix it; once every check is green, Phase 6 merges only if `--merge`/`--auto`, otherwise STOP.
-  - review only (none of `--resolve`/`--merge`/`--auto`) → STOP. Print the PR URL and exit (review passed, nothing else requested).
-- `verdict: CHANGES_REQUESTED` and `--resolve` off → STOP (mode "PR + review"). Print the PR URL and exit.
-- `verdict: CHANGES_REQUESTED` and `--resolve` on → proceed to **Phase 3**.
-- Malformed front-matter, or any finding without a `comment_id` → re-spawn tracks once with explicit format reminder; on second failure, escalate to user.
+- **`--resolve` or `--auto` on** → proceed to **Phase 3**, including when
+  `verdict: APPROVED` and `blocker_count: 0`. Do **not** jump to Phase 5. That
+  Author round still inventories every comment already on the PR (§5.1), checks
+  merge conflicts (§5.3), and attributes CI (§5.4). External CI stays external —
+  never patch around it. `Trigger=review` when Phase 2 just ran (so
+  `review-report.md` is in scope for dedup). After Phase 3, §5.7 decides whether
+  to re-review or poll CI.
+- **`--review` without `--resolve`** (and without `--auto`):
+  - `verdict: APPROVED` and `--merge` on → jump to **Phase 5** (CI). No Author.
+  - otherwise → STOP. Print the PR URL and exit. No Author. No `conflict:` / `CI:`
+    lines from resolve.
+- **`--resolve` off and `verdict: CHANGES_REQUESTED`** → STOP (mode "PR + review").
+  Print the PR URL and exit.
+- Malformed front-matter, or any finding without a `comment_id` → re-spawn tracks
+  once with explicit format reminder; on second failure, escalate to user.
 
-The `blocker_count`, `suggestion_count`, and `nitpick_count` in the front-matter now reflect the sum of findings from both the code track and the test track (when it ran). The Author in Phase 3 works the merged `review-report.md` the same way it always has — it sees no difference between a finding from the code track and one from the test track.
+The `blocker_count`, `suggestion_count`, and `nitpick_count` in the front-matter
+now reflect the sum of findings from both the code track and the test track (when
+it ran). The Author in Phase 3 works the merged `review-report.md` the same way it
+always has — it sees no difference between a finding from the code track and one
+from the test track.
+
+**Examples (completion criterion for this routing):**
+
+1. `--review --resolve`, `verdict: APPROVED`, `blocker_count: 0` → Phase 3 runs.
+   Inventory + conflict check + CI attribution. Terminal includes
+   `conflict: none|resolved|escalated` and `CI: green|fixed|escalated|not-run`.
+2. `--auto`, `verdict: APPROVED`, `blocker_count: 0` → Phase 3 runs (same lines).
+3. `--review` without `--resolve` and without `--merge`, any verdict → STOP after
+   Phase 2. No Author. Those two lines are absent.
+4. `--review --merge` without `--resolve`, `verdict: APPROVED` → Phase 5. No Author.
+5. `--review --resolve`, `verdict: CHANGES_REQUESTED` → Phase 3 (unchanged).
+6. Quiet pass (no comments to address, MERGEABLE, checks green) → `conflict: none`
+   and `CI: green`, then Phase 5. Does not re-enter Phase 2.
+7. A red check attributed `external` → not patched around. Record `ci: escalated`
+   when non-interactive / `--auto`.
 
 ---
 
 ## 5. Phase 3 — Author Subagent (Resolve everything: PR feedback, conflicts, CI)
 
-This phase only runs when `--resolve` (or `--auto`) is set. Otherwise the pipeline stops at the end of Phase 2.
+This phase only runs when `--resolve` (or `--auto`) is set. `--review` without
+`--resolve` stops at the end of Phase 2 — no Author.
+
+When `--resolve`/`--auto` is on, Phase 3 **always** runs after Phase 2, including
+when `verdict: APPROVED` and `blocker_count: 0`. Do not skip to Phase 5. Inventory,
+conflict check, and CI attribution happen every time. External CI is still not
+patched around (§5.4).
 
 The Author owns the **whole PR**, not just the findings pr-autopilot itself produced.
 Its job is to make the PR clean and mergeable. It has four responsibilities, in this
@@ -999,8 +1042,8 @@ order:
 
 1. **Inventory & triage every comment already on the PR** — human or bot, inline or top-level (§5.1).
 2. **Address each actionable finding** — fix, refute, defer or answer, with an inline reply on the comment (§5.2).
-3. **Merge conflicts** — if the PR conflicts with the base branch, resolve them (§5.3).
-4. **Failing CI** — decide whether the failure is even this PR's fault, then fix it or say so (§5.4).
+3. **Merge conflicts** — check mergeability every round; resolve if CONFLICTING (§5.3).
+4. **CI** — read check status every round; attribute and fix only a failure this PR caused (§5.4).
 
 All four respect the **business-logic escalation protocol** (§5.5): the Author never
 silently changes a business rule. When a comment, a conflict or a CI fix would alter
@@ -1016,9 +1059,10 @@ the invisible action marker that records it for the pipeline (§0.3). A standalo
 
 The Author never works from `review-report.md` alone. A review left by a teammate, by
 GitHub Copilot, by CodeRabbit, by SonarCloud or by any other bot is a real finding and
-gets the same treatment. When `Trigger=pr-feedback` (a `--resolve` run without
-`--review`), this inventory is the *only* source of findings — there is no
-`review-report.md` at all.
+gets the same treatment. This inventory runs even when the Reviewer just approved —
+other people's comments, bots, and unanswered threads are still in scope. When
+`Trigger=pr-feedback` (a `--resolve` run without `--review`), this inventory is the
+*only* source of findings — there is no `review-report.md` at all.
 
 **Step 1 — pull everything.**
 
@@ -1196,8 +1240,22 @@ handled (§5.1). The prose never carries the state — the marker does.
 
 ### 5.3 Resolve merge conflicts
 
-If the PR conflicts with its base branch, the Author resolves the conflict on the
-**feature branch** — never by rewriting the base, never with a blind `--force`.
+**Always check mergeability this round**, even when there is no conflict. Read it
+before deciding there is nothing to do:
+
+```bash
+# GitHub
+gh pr view <PR_NUMBER> --json mergeable,mergeStateStatus
+# MERGEABLE / CONFLICTING / UNKNOWN
+
+# GitLab
+glab mr view <PR_NUMBER> --output json   # .merge_status / .has_conflicts
+```
+
+- `MERGEABLE` → record `conflict: none` and skip the rest of this section.
+- `UNKNOWN` → re-check once; if still unknown, treat as `CONFLICTING`.
+- `CONFLICTING` → resolve on the **feature branch** — never by rewriting the base,
+  never with a blind `--force`.
 
 **Mechanic (no history rewrite, no force-push):**
 
@@ -1236,6 +1294,26 @@ unreachable in a non-interactive run), do **not** guess. Record it in the respon
 summary as `conflict: escalated` and halt.
 
 ### 5.4 Fix failing CI — attribute first, then act
+
+**Always read check status this round**, even when nothing is red. This is the
+existing attribution path, forced to run so a green or pending pipeline is not
+mistaken for a skip. External CI stays external — never patch around it.
+
+```bash
+# GitHub
+gh pr checks <PR_NUMBER> --json name,status,conclusion
+
+# GitLab
+glab ci status
+```
+
+Then:
+
+- every required check `success`/`neutral` → record `ci: green`. Stop here (no
+  fix, no triage comment).
+- no required check has a terminal state yet (pending, queued, or none
+  registered) → record `ci: not-run`. Do not wait; Phase 5 polls.
+- any required check `failure`/`cancelled`/`timed_out` → attribute as below.
 
 A red check is not automatically this PR's fault, and the two possible answers lead
 to opposite actions: patch the code, or state on the PR that the pipeline is broken
@@ -1393,8 +1471,11 @@ Repo root: <CWD>
 
 You own the whole PR, not just the findings pr-autopilot produced. Make it clean and
 MERGEABLE. Do the parts that apply this round, in this order: (A) inventory + triage
-every comment on the PR, (B) address the findings, (C) merge conflicts, (D) failing CI.
-Do not edit the PR description. The orchestrator owns the PR visual section.
+every comment on the PR, (B) address the findings, (C) merge conflicts, (D) CI.
+(A), (C) and (D) always run this round — including when the Reviewer just approved
+and there is nothing to fix. A quiet pass still records `conflict: none` and
+`ci: green` or `not-run`. Do not edit the PR description. The orchestrator owns
+the PR visual section.
 
 GOLDEN RULE — never silently change a business rule.
 Before you act on a comment, resolve a conflict, or write a CI fix that would alter
@@ -1548,8 +1629,13 @@ Per finding, in order:
      glab api -X PUT projects/:id/merge_requests/<iid>/discussions/<discussion_id>?resolved=true
 
 ──────────────────────────────────────────────────────────────────────────────
-(C) MERGE CONFLICTS  (whenever the PR conflicts with base)
-Resolve on the FEATURE branch, no history rewrite, no force-push:
+(C) MERGE CONFLICTS  (always check this round)
+Read mergeability first:
+     gh pr view <PR_NUMBER> --json mergeable,mergeStateStatus
+     GitLab: glab mr view <PR_NUMBER> --output json
+MERGEABLE → record `conflict: none` and skip the rest of (C).
+UNKNOWN → re-check once; still unknown ⇒ treat as CONFLICTING.
+CONFLICTING → resolve on the FEATURE branch, no history rewrite, no force-push:
      git fetch origin
      git merge origin/<BASE>          # base into feature branch
      # resolve each conflicted file (see the resolution ladder below), then:
@@ -1567,10 +1653,15 @@ never a blind `-f`. If a conflict can't be resolved safely and the user is
 unreachable, record `conflict: escalated` and halt.
 
 ──────────────────────────────────────────────────────────────────────────────
-(D) FAILING CI  (whenever a required check is red) — ATTRIBUTE FIRST
-     gh pr checks <PR_NUMBER> --json name,state,link,workflow
-     gh run view <run_id> --log-failed   # GitHub — failing steps
+(D) CI  (always read check status this round) — ATTRIBUTE BEFORE ACTING
+     gh pr checks <PR_NUMBER> --json name,status,conclusion,state,link,workflow
+     gh run view <run_id> --log-failed   # GitHub — failing steps (only if red)
      glab ci status && glab ci trace     # GitLab
+
+All required checks success/neutral → record `ci: green`. Do not patch anything.
+No terminal state yet (pending, queued, none registered) → record `ci: not-run`.
+Do not wait; Phase 5 polls.
+Any required check red → ATTRIBUTE FIRST, then D1–D3.
 
 D1. ATTRIBUTE each red check as `pr`, `external`, or `unknown`, with evidence:
     PR's fault  — the failing file/test is in `gh pr diff --name-only`; the log shows
@@ -1627,6 +1718,8 @@ replies that claim a fix (`action=fixed`). Write a failure record into the respo
 summary and stop.
 
 OUTPUT
+Always fill `conflict` and `ci`. A quiet pass is `conflict: none` and
+`ci: green` or `not-run` — never omit the keys.
 Write .pr-autopilot/<PR_NUMBER>/iter-<N>/response-summary.md:
 
 ---
@@ -1697,7 +1790,15 @@ verification: pass | fail | partial
 - Validate: every BLOCKER must have `Action: FIXED` or `REFUTED` in `response-summary.md` — the same value its posted reply carries as `action=` in the trailing marker (§0.3). Any BLOCKER with `DEFERRED`/`SKIPPED` → halt and escalate (this is a guardrail violation). This applies to BLOCKERs inferred from external `CHANGES_REQUESTED` reviews exactly as it does to pr-autopilot's own.
 - If a human left `CHANGES_REQUESTED` and has not re-reviewed, the PR is not mergeable regardless of CI — never merge past a standing human block.
 - **PR visual regenerate.** Only if `--show-me` is on **this run** (`state.json.show_me` was set from that flag in Phase 1, not inherited from an older run) **and** `push_sha` is not `n/a` **and** `git diff <state.head_sha> <push_sha>` is non-empty: fetch the live description, generate a fresh section from the current diff (§3.4), `apply`, update the PR/MR, rewrite `pr-visual.md`, set `head_sha` to `push_sha`, print `PR visual section replaced` (or `appended` if the opener was missing). The orchestrator does this, not the Author. If this run did not pass `--show-me`, or there was no push, or the diff is unchanged, leave the description alone.
-- If everything green → increment iteration counter. Under `--review` (or `--auto`), return to **Phase 2** with iteration N+1; under a `--resolve`-only run, go to **Phase 5**.
+- **Print the resolve outcome.** Whenever `--resolve`/`--auto` ran this invocation, print two lines from `response-summary.md`, even on a quiet pass:
+  ```
+  [3/6] conflict: none
+  [3/6] CI: green
+  ```
+  Values are `conflict: none|resolved|escalated` and `CI: green|fixed|escalated|not-run`. A skip of those lines is valid only when `--resolve` was off.
+- If everything green (verification passed, no `conflict: escalated`, no `ci: escalated`):
+  - Another review round is due when `--review`/`--auto` is on, `iteration < MAX_ITERATIONS`, and either the Reviewer verdict this iteration was `CHANGES_REQUESTED` or `push_sha` is not `n/a` → increment iteration, return to **Phase 2**.
+  - Otherwise go to **Phase 5**. A quiet Author pass after `APPROVED` (`conflict: none`, `CI: green` or `not-run`, no push) does not re-enter Phase 2. A `--resolve`-only run (no `--review`) always continues to Phase 5 after a successful Author round.
 - After `MAX_ITERATIONS` cycles still not APPROVED (or CI still red) → escalate: print summary of remaining BLOCKERs / red checks and ask user how to proceed (extend iterations / abort). Never force a merge past a guardrail.
 
 ---
@@ -1786,6 +1887,8 @@ Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `sta
 | `--show-me` and `show-me` skill missing | Use the condensed fallback in §3.4. Never skip silently. Never emit HTML |
 | `--show-me` Author round with no push or unchanged diff | Leave the description alone |
 | `--resolve` / `--auto` without `--show-me` | Never write a PR visual section |
+| Reviewer `APPROVED`, `--resolve`/`--auto` on | Phase 3 still runs. Inventory, conflict check, CI attribution. Terminal prints `conflict:` and `CI:` even on a quiet pass |
+| `--review` without `--resolve` | STOP after Phase 2. No Author. No `conflict:` / `CI:` lines from resolve |
 | Working tree dirty | Ask user to commit; do not auto-stash |
 | Push rejected (non-fast-forward) | Stop, ask user — do not force-push |
 | Author agent breaks lint/tests | Halt loop, surface logs |
@@ -1870,7 +1973,7 @@ pr-autopilot --review
 # + CI, without posting a new AI review
 pr-autopilot --resolve
 
-# Post a review first, then resolve it plus everything else on the PR
+# Post a review first, then Author runs even if that review is APPROVED
 pr-autopilot --review --resolve
 
 # Resolve existing feedback + merge on green CI
@@ -1910,7 +2013,12 @@ Keep terminal output terse. Per phase, emit one line:
 [3/6] Author iter 1   → 2 fixed, 1 deferred, 1 answered, replies posted, pushed abc1234
 [3/6] PR visual section replaced
 [3/6] Author iter 1   → conflict in `pricing.ts` resolved (merged base, groom-me confirmed) def5678
+[3/6] conflict: resolved
+[3/6] CI: not-run
 [2/6] Reviewer iter 2 → APPROVED
+[3/6] Author iter 2   → triaged 12 comments (0 actionable, 3 noise, 9 already handled)
+[3/6] conflict: none
+[3/6] CI: green
 [5/6] CI: waiting… 2/4 pending
 [5/6] CI: `unit` failed → attributed to this PR → flaky assert corrected, pushed 9ab0cd1
 [5/6] CI: `e2e` failed → attributed to main (fails at 77f2a1c too) → asked, comment posted
@@ -1918,8 +2026,26 @@ Keep terminal output terse. Per phase, emit one line:
 [6/6] Merged (squash) → main @ ef01234
 ```
 
+Whenever `--resolve` ran, the Author round **always** prints a conflict line
+(`none` / `resolved` / `escalated`) and a CI line (`green` / `fixed` /
+`escalated` / `not-run`), even on a quiet pass. A skip of those two lines is
+valid only when `--resolve` was off.
+
+Quiet pass after APPROVED (`--review --resolve`):
+
+```
+[mode] --review --resolve
+[1/6] PR #482 created → https://github.com/acme/api/pull/482
+[2/6] Reviewer iter 1 → APPROVED
+[3/6] Author iter 1   → triaged 4 comments (0 actionable, 2 noise, 2 already handled)
+[3/6] conflict: none
+[3/6] CI: green
+[5/6] CI: 4/4 checks green
+```
+
 The `[mode]` line reflects the flags in play — e.g. `PR only (no flags)`,
 `--merge`, `--review`, `--resolve`, or `--auto (full hands-off)`. Phases that don't
-run for the chosen mode are simply absent from the output.
+run for the chosen mode are simply absent from the output — except the conflict
+and CI lines, which are never absent when `--resolve` ran.
 
 On any halt, print: phase, reason, the artifact path the user should inspect, and 1–2 suggested next actions. On an `escalated` halt (business-rule conflict / unfixable CI), name exactly what needs a human decision.
