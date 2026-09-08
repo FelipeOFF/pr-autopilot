@@ -18,7 +18,8 @@ This skill is **rigid**. Follow the phases in order. Do not skip the verificatio
 
 ## 0. House style — humanize the prose, ponytail the code, show-me the views
 
-pr-autopilot produces three kinds of output, and each one has a skill that owns it.
+pr-autopilot produces three kinds of output (views split into the PR visual and
+comment views), and each one has a skill that owns it.
 This binds every agent in the pipeline: the orchestrator, the Reviewer, the Author,
 and anything they spawn.
 
@@ -27,15 +28,21 @@ and anything they spawn.
 | Natural-language prose | `humanizer` | PR title and body, review summary, every inline comment, every inline reply, the CI triage comment, the PR briefing after the section opener |
 | Code | `ponytail` | Every fix the Author writes, every snippet the Reviewer suggests, conflict resolutions, CI repairs |
 | PR visual views | `show-me` | Mermaid, file tree, call tree, markdown diff inside the PR visual section. Never HTML. |
+| Comment views | `show-me` | Same four shapes, one per Reviewer finding when `--show-me --review`. Never HTML. Not the PR visual section. |
 
 Invoke them with the `Skill` tool — `skill: "humanizer"`, `skill: "ponytail"`,
 `skill: "show-me"`. Some harnesses namespace ponytail as `ponytail:ponytail`; try
-the plain name first and fall back. **If a skill is not installed, the rules in
-§0.1, §0.2 and §3.4 still bind.** They are the part of each skill this pipeline
-depends on, written out so an agent in a bare harness behaves the same way.
-Subagent prompt templates (§4.5, §5.6) carry their own copy of house style for
-the same reason — a subagent is stateless and never reads this file. The
+the plain name first and fall back. **If `humanizer` or `ponytail` is not
+installed, the rules in §0.1 and §0.2 still bind.** The PR visual section keeps
+the condensed `show-me` fallback in §3.4. **Comment views do not.** If `--show-me`
+is on and `show-me` cannot load: print an alert that names `show-me` and the
+install line `npx skills add FelipeOFF/skills --skill=show-me`, emit no HTML, do
+not invent a comment view, and continue the rest of the pipeline (§4.3). Print
+that alert once per run. Subagent prompt templates (§4.5, §5.6) carry their own
+copy of house style — a subagent is stateless and never reads this file. The
 orchestrator owns the PR visual section; Reviewer and Author do not write it.
+The Reviewer prompt receives this run's `--show-me` bit so it can load `show-me`
+for comment views. The Author still must not rewrite the PR description.
 
 Local artifacts under `.pr-autopilot/` are the exception. They are machine state that
 nobody reads on the PR, so their front-matter and `Action:` fields keep the flat
@@ -69,9 +76,10 @@ the repository already uses them in its own comments.
 Do not humanize: code snippets, file paths, SHAs, command lines, machine markers
 (`<!-- pr-autopilot:... -->`), the front-matter of local artifacts, the section
 opener (the first sentence of the PR visual section — exact template, bit-identical
-every run), mermaid fences, file trees, call trees, or markdown diffs in that
-section. Humanize the natural language between them. The PR briefing (the sentences
-after the opener) is humanized; the opener is not.
+every run), mermaid fences, file trees, call trees, or markdown diffs in the PR
+visual section **or** in a comment view. Humanize the natural language between
+them. The PR briefing (the sentences after the opener) is humanized; the opener
+is not.
 
 ### 0.2 Code is written by `ponytail`
 
@@ -133,6 +141,7 @@ parseable severity in the marker:
 Marker rules:
 
 - Exactly one marker per posted comment, alone on the last line.
+- A comment view (when present) sits in the body with the prose; the marker is still the last line.
 - `action` is one of `fixed`, `refuted`, `deferred`, `skipped`, `answered`. `sha=` appears only on `fixed`.
 - Never humanize, translate, reword or reformat a marker. It is not prose.
 - The marker is what marks a thread handled on the next iteration. A reply without one gets re-answered forever.
@@ -165,7 +174,9 @@ Rules that tie the flags together:
 - `--review --resolve` (and `--auto`) reviews first, then the Author resolves that review *plus* everything else already on the PR — and still runs when the Reviewer approved.
 - `--merge` is what enables the merge. Without it (and without `--auto`), the pipeline always stops before merging, no matter how green CI is.
 - `--auto` is shorthand for `--review --resolve --merge` plus a "never prompt for confirmation" semantic **and** the aggressive-resolution behavior: in `--auto` (and any `--resolve`) run, the Author resolves merge conflicts and fixes failing CI, not just review comments.
-- `--auto` does **not** turn on `--show-me`. The PR visual section is a separate opt-in.
+- `--auto` does **not** turn on `--show-me`. The PR visual section and comment
+  views are a separate opt-in. `--show-me` without `--review` still only means
+  the PR visual section (existing behavior), not a new review.
 - `--draft` forces no merge even when `--merge`/`--auto` is set.
 - **No prompts means no consent.** Anything that needs the developer's explicit yes — a business-rule change (`groom-me`), or a comment claiming CI is red for reasons outside the PR — is never done silently in `--auto` or in a non-interactive run. It is recorded as `escalated` instead.
 
@@ -191,7 +202,7 @@ required check green AND the PR is `MERGEABLE`.
 | `--ci-poll-interval` | `30` | Seconds between status polls. Backs off to 60s after 10 polls. |
 | `--title` | auto-generated | Override generated title. |
 | `--body` | auto-generated | Override generated body. Starting point for `--show-me` apply; the flag still appends or replaces the PR visual section. |
-| `--show-me` | `false` | Append (or replace) a PR visual section on the PR description so a human reviewer can read what the change does before the diff. Not implied by `--auto`. |
+| `--show-me` | `false` | Append (or replace) a PR visual section on the PR description so a human reviewer can read what the change does before the diff. Combined with `--review`, every Reviewer finding also gets one comment view (mermaid / file tree / call tree / markdown diff, never HTML) on the same line as the finding. Not implied by `--auto`. |
 
 Boolean flags accept a bare form (`--review`) or an explicit value
 (`--review=true` / `--review=false`). The bare form means `true`. An explicit
@@ -232,8 +243,9 @@ Invocation examples:
 - `pr-autopilot --auto` → full hands-off; merges only when CI is green
 - `pr-autopilot --auto --merge-strategy=rebase --max-iterations=3`
 - `pr-autopilot --show-me` → create the PR with a PR visual section, then stop
+- `pr-autopilot --show-me --review` → PR visual section **and** one comment view on each Reviewer finding
 - `pr-autopilot --show-me --resolve` → section on create, regenerate after an Author push that changed the diff
-- `pr-autopilot --auto --show-me` → full hands-off **and** the section (still not implied by `--auto` alone)
+- `pr-autopilot --auto --show-me` → full hands-off **and** the section (still not implied by `--auto` alone); because `--auto` already turns on `--review`, findings get comment views too
 
 If no flags are present and the invocation is interactive, the orchestrator MAY
 prompt once: "Which mode? [1] PR only (default)  [2] PR + merge  [3] PR + review
@@ -286,7 +298,9 @@ create the PR and stop.
 Because they are stateless, every subagent prompt carries its own copy of the house
 style (§0): the Reviewer and the Author each invoke `humanizer` for prose and
 `ponytail` for code, and behave the same way when neither skill is installed in
-their harness.
+their harness. The Reviewer prompt also receives this run's `--show-me` bit. When
+it is on, the Reviewer loads `show-me` for comment views (§4.3). The Author still
+must not edit the PR description.
 
 Phase 3 only runs under `--resolve`/`--auto`, and when those flags are on it
 **always** runs after Phase 2 — including when the Reviewer verdict is APPROVED.
@@ -427,10 +441,14 @@ approve.>
    views that explain *this* change to a human reviewer, from {mermaid, file
    tree, call tree, markdown diff}, **at most two**. Never HTML — GitHub and
    GitLab will not render it in the description.
-3. If `show-me` is missing, do the same by hand: pick at most two of those
-   views. A one-line config change gets a small view, not a sequence diagram.
-   A large diff gets the slice the reviewer needs, not a map of the repo.
-   Never skip silently. Never emit HTML. Format:
+3. If `show-me` is missing, print an alert once this run that names `show-me`
+   and the install line `npx skills add FelipeOFF/skills --skill=show-me`. Then,
+   for the **PR visual section only**, do the same by hand: pick at most two of
+   those views. A one-line config change gets a small view, not a sequence
+   diagram. A large diff gets the slice the reviewer needs, not a map of the
+   repo. Never skip the PR visual silently. Never emit HTML. Do **not** use
+   this fallback to invent **comment views** (§4.3) — those stay omitted when
+   the skill is missing. Format:
    - mermaid → a fenced block with language `mermaid` (flowchart or sequence)
    - file tree → indented tree; every path in backticks
    - call tree → indented calls; paths in backticks
@@ -710,7 +728,91 @@ Blocking: this test mocks `calculateTotal` and asserts the mock's return value, 
 <!-- pr-autopilot:severity=blocker -->
 ```
 
-These test-track findings are added to the same `findings` array the code track produces, before the orchestrator posts the consolidated review in §4.6.
+These test-track findings are added to the same `findings` array the code track produces, before the orchestrator posts the consolidated review in §4.6. When `--show-me` is on, each of them goes through **posted()** (§4.3) the same way as a code-track finding, so it also gets exactly one comment view.
+
+### 4.3 Comment views on findings (`--show-me --review`)
+
+A **comment view** is a show-me view inside a posted Reviewer finding. Same four
+shapes as a PR visual (mermaid, file tree, call tree, markdown diff). Never HTML.
+Not the PR visual section. One view per finding, in the same inline comment, on
+the same line as the finding. The marker stays alone on the last line.
+
+Skip this whole section when `--show-me` is off **or** `--review` is off.
+`--review` without `--show-me` stays prose-only. `--show-me` without `--review`
+still only means the PR visual section (§3.4). `--auto` does not turn `--show-me`
+on; `--auto --show-me` does, and because `--auto` already turns on `--review`,
+findings get comment views too.
+
+The PR visual section is unchanged: description only, at most two views,
+`apply()` as in §3.4, opener bit-identical. Reviewer and Author still must not
+rewrite the PR description.
+
+**Who writes the view.** The Reviewer prompt includes this run's `--show-me` bit
+and, when it is on, loads `show-me` to pick one view per finding. The orchestrator
+runs **posted()** below before the GitHub/GitLab review POST, so a missing view is
+filled when the skill loaded, or omitted when it did not. The Author does not
+write finding bodies.
+
+**Missing `show-me` skill.** If `--show-me` is on and the Skill tool cannot load
+`show-me`: print an alert that names `show-me` and the install line
+`npx skills add FelipeOFF/skills --skill=show-me` (once per run, same alert as
+§3.4). Do not emit HTML. Do not silently invent comment views. Post the findings
+as prose + marker. Continue the rest of the pipeline (PR created, review posted,
+resolve if that flag is on). The PR visual section still uses the condensed
+fallback in §3.4.
+
+**`posted(finding) → body`** — this is the seam. Done means the examples below hold.
+
+```
+on(posted_finding)
+  prose = humanizer(draft)
+  if --show-me and --review and show-me skill loaded this run
+    view = exactly one of {mermaid, file tree, call tree, markdown diff}
+  else
+    view = none
+  body = prose
+         + (blank line + view if any)
+         + marker alone on last line
+  never HTML
+  never rewrite marker, fences, trees, diffs, paths, SHAs
+  if a draft carries more than one view, keep the first, drop the rest
+```
+
+Format of a view (same as §3.4, one of):
+
+- mermaid → a fenced block with language `mermaid` (flowchart or sequence)
+- file tree → indented tree; every path in backticks
+- call tree → indented calls; paths in backticks
+- markdown diff → a fenced block with language `diff`
+
+File paths in every view go in backticks. Pick the smallest view that makes
+*this* finding clear — a missing session guard is a three-line call tree, not a
+map of the repo.
+
+**Examples (completion criterion for posted):**
+
+1. `--review` without `--show-me` → each finding is humanized prose + marker last line; no mermaid / file tree / call tree / markdown-diff view.
+2. `--show-me --review`, skill present → each finding (code track and test track) has exactly one of those four shapes; marker last line; PR visual section still `apply()` from §3.4 (≤2 views, opener bit-identical).
+3. `--show-me --review`, skill missing → one alert naming `show-me` plus `npx skills add FelipeOFF/skills --skill=show-me`; findings posted with no comment view and no HTML; pipeline continues; PR visual section still uses the §3.4 fallback.
+4. `--show-me` without `--review` → no review comments generated; PR visual section only.
+5. Finding body with a comment view → last non-empty line is `<!-- pr-autopilot:severity=… -->`.
+6. Draft finding with two views → posted body keeps the first, drops the second; marker still last.
+
+Posted shape when `--show-me --review` and the skill loaded:
+
+```markdown
+Blocking: checkout still calls `chargeCard` after `reserveInventory` fails, so
+the customer is billed for a hold that never lands.
+
+checkout
+  reserveInventory
+    chargeCard
+
+<!-- pr-autopilot:severity=blocker -->
+```
+
+Without `--show-me`, that same finding is the prose and the marker, nothing in
+between.
 
 ### 4.4 How to post inline comments (both tracks)
 
@@ -726,8 +828,8 @@ COMMIT_SHA=$(git rev-parse HEAD)
 
 # 2. POST the review with inline comments in a single call.
 #    Each comment carries: path, line, side ("RIGHT" for added/modified lines,
-#    "LEFT" for removed-only context), the humanized body, and the invisible
-#    severity marker on the body's last line.
+#    "LEFT" for removed-only context), the posted() body from §4.3 (humanized
+#    prose, optional comment view, invisible severity marker on the last line).
 gh api -X POST "repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews" \
   -f commit_id="$COMMIT_SHA" \
   -f event="REQUEST_CHANGES" \   # or "COMMENT" if blocker_count == 0
@@ -741,10 +843,14 @@ gh api -X POST "repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews" \
 
 For a multi-line comment, use `start_line` + `start_side` + `line` + `side` instead of just `line`.
 
-Every inline comment body is humanized prose that opens the way a reviewer speaks
-(`Blocking:` / `Suggestion:` / `nit:`) and **must** end with exactly one severity
-marker alone on its last line: `<!-- pr-autopilot:severity=blocker|suggestion|nitpick -->`.
-That marker, not the prose, is what the Author parses next (§0.3).
+Every inline comment body is the output of **posted()** (§4.3): humanized prose
+that opens the way a reviewer speaks (`Blocking:` / `Suggestion:` / `nit:`),
+optionally one comment view when `--show-me` is on and `show-me` loaded, and
+**must** end with exactly one severity marker alone on its last line:
+`<!-- pr-autopilot:severity=blocker|suggestion|nitpick -->`. That marker, not the
+prose, is what the Author parses next (§0.3). The comment is still anchored to
+the finding's file and line — the view lives in the body, not as a second
+comment. Never HTML.
 
 If `gh api` rejects a `line` (e.g. the line is unchanged in the diff), the Reviewer must anchor to the **nearest changed line** in the same hunk and prefix the body with `(near line X)` so the location is clear. Never silently drop a finding.
 
@@ -755,9 +861,7 @@ If `gh api` rejects a `line` (e.g. the line is unchanged in the diff), the Revie
 # Get them from: glab api projects/:id/merge_requests/<iid>?include_diverged_commits_count=true
 
 glab api -X POST "projects/:id/merge_requests/<MR_IID>/discussions" \
-  -F body="Blocking: ...
-
-<!-- pr-autopilot:severity=blocker -->" \
+  -F body="<posted() body from §4.3>" \
   -F position[position_type]=text \
   -F position[base_sha]=$BASE_SHA \
   -F position[head_sha]=$HEAD_SHA \
@@ -786,8 +890,9 @@ Head: <BRANCH>
 Head SHA: <HEAD_SHA>
 Iteration: <N> of <MAX>
 Repo root: <CWD>
+show_me: <true|false>   (this invocation only; do not inherit from an older run)
 
-LOAD YOUR THREE SKILLS FIRST (in this order)
+LOAD YOUR SKILLS FIRST (in this order)
 1. `thermo-nuclear-code-quality-review` (Skill tool, skill: "thermo-nuclear-code-quality-review")
    BEFORE reading the diff. This IS the review standard: core prompt, rules 0–7,
    questions, flag list, remedies, tone, output priority, approval bar. If unavailable,
@@ -799,9 +904,17 @@ LOAD YOUR THREE SKILLS FIRST (in this order)
 3. `humanizer` (Skill tool, skill: "humanizer") before you post anything. It owns
    every word of prose you write. The maintainability audit is direct and demanding;
    humanizer strips AI tells but keeps the directness.
+4. If show_me is true: `show-me` (Skill tool, skill: "show-me") for **one comment
+   view per finding** from {mermaid, file tree, call tree, markdown diff}. Never
+   HTML. If it cannot load, write prose + marker only — do not invent a view, do
+   not emit HTML. The orchestrator will alert and print the install line.
 
-If any skill is unavailable in your harness, the FALLBACK RULES and HOUSE STYLE blocks
-below carry the condensed version — apply those by hand.
+If `thermo-nuclear-code-quality-review`, `ponytail`, or `humanizer` is unavailable
+in your harness, the FALLBACK RULES and HOUSE STYLE blocks below carry the
+condensed version — apply those by hand. `show-me` is different: no condensed
+fake comment view when show_me is true and the skill is missing.
+
+Do not edit the PR description. The orchestrator owns the PR visual section.
 
 YOUR TASK
 1. Read the full diff: git diff <BASE>...<BRANCH>
@@ -843,16 +956,18 @@ Structure each finding with:
 - path (file path)
 - line (or start_line + line for multi-line)
 - side ("RIGHT" for added/modified, "LEFT" for removed-only context)
-- body (humanized prose + severity marker)
+- body (humanized prose + optional comment view + severity marker)
 
-The orchestrator will use this structure to build the GitHub `comments[]` array or
-the GitLab discussion position blocks.
+The orchestrator will assemble the posted body from this (prose, optional view,
+marker) before the host POST. You do not post the review.
 
 COMMENT FORMAT — write like a reviewer, not like a form
 Never open a comment with `[BLOCKER]`, `[SUGGESTION]`, `[NITPICK]` or a status
-emoji. Open with the words a reviewer says out loud, say what breaks and where, and
-close the body with one invisible severity marker alone on the last line. The marker
-is what the pipeline parses; the prose is what the human reads.
+emoji. Open with the words a reviewer says out loud, say what breaks and where.
+If show_me is true and `show-me` loaded, put exactly one comment view (mermaid,
+file tree, call tree, or markdown diff — never HTML) after the prose. Close the
+body with one invisible severity marker alone on the last line. The marker is
+what the pipeline parses; the prose is what the human reads.
 
   Blocking: the /admin/users handler trusts the X-User header without checking it,
   so anyone can set that header and read the admin list.
@@ -864,6 +979,10 @@ is what the pipeline parses; the prose is what the human reads.
   ```
 
   <!-- pr-autopilot:severity=blocker -->
+
+When show_me is true, that same finding includes one view above the marker, e.g.
+a call tree of the missing guard. Never two views. Never HTML. If show_me is
+false, omit the view.
 
 Openers and markers:
   BLOCKER    → "Blocking: …"    <!-- pr-autopilot:severity=blocker -->
@@ -890,8 +1009,9 @@ practice suggests"), filler ("it's worth noting that", "in order to"), generic
 closers ("Overall this improves code quality"), and formulaic praise ("Great work
 on this PR!"). Short sentences. Name the file, the line and the consequence. No
 emoji unless the repo already uses them.
-Humanize the prose only. Code snippets, file paths, line refs and the trailing
-marker stay exactly as drafted.
+Humanize the prose only. Code snippets, file paths, line refs, comment views
+(mermaid fences, file trees, call trees, markdown diffs) and the trailing marker
+stay exactly as drafted.
 
 CODE. Every snippet you suggest goes through `ponytail` first, stopping at the first
 rung that holds: does this need to exist at all → does the repo already have it
@@ -966,7 +1086,7 @@ After both tracks complete (or after the code track alone when no tests are in t
      - `path` = `src/foo.test.ts`
      - `line` = `42`
      - `side` = `RIGHT` (tests are always in the new side of the diff)
-     - `body` = humanized prose (run the justification through `humanizer`) + severity marker
+     - `body` = humanized prose (run the justification through `humanizer`) + severity marker. posted() in step 7 adds the comment view when `--show-me` is on.
      - Severity: tautology / always-green / mocking-the-unit = `blocker`, weaker justifications = `suggestion`
 4. **Deduplicate**: if both tracks flagged the same line (rare), keep the BLOCKER if either is a BLOCKER, else merge the prose.
 5. **Update the front-matter** of `review-report.md`:
@@ -974,10 +1094,19 @@ After both tracks complete (or after the code track alone when no tests are in t
    - Set `verdict: CHANGES_REQUESTED` if any BLOCKER, else `APPROVED`
    - Add `test_track: ran` or `test_track: skipped — no tests in diff`
 6. **Append test-track findings** to the "## Inline findings" section of `review-report.md`, preserving the structured format.
-7. **Post the consolidated review** to GitHub/GitLab using the merged findings array:
+7. **Run posted() (§4.3) on every finding** before the host POST. That is the
+   body that goes to GitHub/GitLab:
+   - `--review` without `--show-me` → prose + marker, no comment view (strip a
+     view if a confused Reviewer included one)
+   - `--show-me --review` and `show-me` loaded → exactly one comment view;
+     generate one if the Reviewer omitted it; if two, keep the first
+   - `--show-me` on and `show-me` missing → already alerted in §3.4 / §4.3;
+     post prose + marker, no HTML, no invented view
+   - Marker is the last line in every case
+8. **Post the consolidated review** to GitHub/GitLab using those posted bodies:
    - GitHub: one `gh api -X POST repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews` with all `comments[]` from both tracks, `event=REQUEST_CHANGES` if any BLOCKER, else `COMMENT`
    - GitLab: one `glab api POST` per finding (GitLab doesn't batch them)
-8. **Record `comment_id` and `url`** for each posted finding back into `review-report.md` (the Author needs them in Phase 3).
+9. **Record `comment_id` and `url`** for each posted finding back into `review-report.md` (the Author needs them in Phase 3).
 
 The result: one `review-report.md` with findings from both tracks, and one posted review on the PR with inline comments on code files (from the code-review track) and test files (from the test-nuke track).
 
@@ -1466,6 +1595,7 @@ Base: <BASE>
 Iteration: <N>  of <MAX>
 Trigger: <pr-feedback | review | ci-fix>   (why you were spawned this round)
 Interactive: <yes|no>   (no ⇒ you may not prompt; escalate instead of asking)
+show_me: <true|false>   (this invocation only; do not inherit from an older run)
 Review report: .pr-autopilot/<PR_NUMBER>/iter-<N>/review-report.md   (present only when Trigger=review)
 Repo root: <CWD>
 
@@ -1476,6 +1606,8 @@ every comment on the PR, (B) address the findings, (C) merge conflicts, (D) CI.
 and there is nothing to fix. A quiet pass still records `conflict: none` and
 `ci: green` or `not-run`. Do not edit the PR description. The orchestrator owns
 the PR visual section.
+Do not add a comment view to a reply or to a CI triage comment. Finding comment
+views (when show_me is true) are already on the Reviewer comments.
 
 GOLDEN RULE — never silently change a business rule.
 Before you act on a comment, resolve a conflict, or write a CI fix that would alter
@@ -1884,9 +2016,12 @@ Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `sta
 | Situation | Action |
 |-----------|--------|
 | PR already exists | Reuse PR number, skip creation. If `--show-me`, still run §3.4 on the live description |
-| `--show-me` and `show-me` skill missing | Use the condensed fallback in §3.4. Never skip silently. Never emit HTML |
+| `--show-me` and `show-me` skill missing | Alert once naming `show-me` plus `npx skills add FelipeOFF/skills --skill=show-me`. PR visual section still uses the condensed fallback in §3.4. No HTML. No silent fake comment views. Pipeline continues |
+| `--show-me --review` | Each Reviewer finding (code + test track) gets exactly one comment view (§4.3). Marker last line. PR visual section unchanged |
+| `--review` without `--show-me` | Findings stay prose-only. No comment view |
+| `--show-me` without `--review` | PR visual section only. No new review, no comment views |
 | `--show-me` Author round with no push or unchanged diff | Leave the description alone |
-| `--resolve` / `--auto` without `--show-me` | Never write a PR visual section |
+| `--resolve` / `--auto` without `--show-me` | Never write a PR visual section. Never write a comment view |
 | Reviewer `APPROVED`, `--resolve`/`--auto` on | Phase 3 still runs. Inventory, conflict check, CI attribution. Terminal prints `conflict:` and `CI:` even on a quiet pass |
 | `--review` without `--resolve` | STOP after Phase 2. No Author. No `conflict:` / `CI:` lines from resolve |
 | Working tree dirty | Ask user to commit; do not auto-stash |
@@ -1991,10 +2126,14 @@ pr-autopilot --merge --base=develop
 # Reviewer briefing on the PR description (opt-in; --auto does not imply this)
 pr-autopilot --show-me
 
+# Briefing on the description, plus one comment view on each Reviewer finding
+pr-autopilot --show-me --review
+
 # Briefing on create, regenerate after Author fixes that change the diff
 pr-autopilot --show-me --resolve
 
-# Full hands-off plus the briefing
+# Full hands-off plus the briefing (and comment views on findings, because
+# --auto already turns on --review)
 pr-autopilot --auto --show-me
 ```
 
@@ -2047,5 +2186,14 @@ The `[mode]` line reflects the flags in play — e.g. `PR only (no flags)`,
 `--merge`, `--review`, `--resolve`, or `--auto (full hands-off)`. Phases that don't
 run for the chosen mode are simply absent from the output — except the conflict
 and CI lines, which are never absent when `--resolve` ran.
+
+On a `--show-me` run where `show-me` cannot load, also print (once):
+
+```
+[1/6] show-me skill missing — skipped comment views. npx skills add FelipeOFF/skills --skill=show-me
+```
+
+The PR visual section still uses the §3.4 fallback. The rest of the pipeline
+continues.
 
 On any halt, print: phase, reason, the artifact path the user should inspect, and 1–2 suggested next actions. On an `escalated` halt (business-rule conflict / unfixable CI), name exactly what needs a human decision.

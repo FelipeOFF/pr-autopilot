@@ -48,7 +48,7 @@ Os estágios ②–⑥ são opt-in. Sem nenhuma flag, a execução termina depoi
 
 - **Estágios opt-in** — toda flag tem default `false`. O `pr-autopilot` puro abre o PR e para; você liga review, resolve e merge conforme precisar.
 - **Título e descrição automáticos** baseados em commits e diff, seguindo Conventional Commits + Jira.
-- **`--show-me` briefing para o revisor** — opt-in. Anexa uma seção `## What this PR does` na descrição do PR (mermaid / file tree / call tree / diff em markdown, nunca HTML) para o revisor humano ler o que a mudança faz, o trade-off e a alternativa que não entrou, antes do diff. `--auto` não liga isso. Uma segunda execução troca a seção em vez de duplicar. Com `--resolve`, a seção regenera depois de um push do Author que de fato mudou o diff.
+- **`--show-me` briefing para o revisor** — opt-in. Anexa uma seção `## What this PR does` na descrição do PR (mermaid / file tree / call tree / diff em markdown, nunca HTML) para o revisor humano ler o que a mudança faz, o trade-off e a alternativa que não entrou, antes do diff. Combinado com `--review`, cada finding do Reviewer também ganha um **comment view** nas mesmas quatro formas, na mesma linha do achado; o marcador de severidade continua por último. `--auto` não liga isso. Uma segunda execução troca a seção em vez de duplicar. Com `--resolve`, a seção regenera depois de um push do Author que de fato mudou o diff.
 - **Loop de review multi-agente** com achados estruturados: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Author com poder de veto** — pode refutar um BLOCKER incorreto com evidência ao invés de aplicar cegamente.
 - **Escreve como gente, codifica como sênior preguiçoso** — cada palavra postada no PR passa pela [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) e cada linha de código pela [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). Sem carimbo `✅ FIXED`, sem colchete `[BLOCKER]`, sem emoji de abertura: o comentário parece escrito por um colega, e o estado de máquina viaja num marcador HTML invisível. As duas skills também estão reescritas dentro da própria skill, então um harness sem elas se comporta igual.
@@ -213,6 +213,9 @@ De qualquer branch com commits para enviar:
 # Briefing para o revisor na descrição (--auto não implica isso)
 /pr-autopilot --show-me
 
+# Briefing na descrição, mais um comment view em cada finding do Reviewer
+/pr-autopilot --show-me --review
+
 # Briefing na criação; regenera depois de fixes do Author que mudam o diff
 /pr-autopilot --show-me --resolve
 ```
@@ -231,13 +234,13 @@ Toda flag booleana tem default `false` — passe-a (pura, ou `=true`) para ligar
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
 | `--base` | auto | Branch alvo |
 | `--draft` | `false` | Abre como draft (força sem merge) |
-| `--show-me` | `false` | Anexa (ou troca) um briefing para o revisor na descrição do PR. `--auto` não liga. |
+| `--show-me` | `false` | Anexa (ou troca) um briefing para o revisor na descrição do PR. Combinado com `--review`, também coloca um comment view em cada finding do Reviewer. `--auto` não liga. |
 | `--ci-timeout` | `1800` | Segundos antes de desistir do CI |
 | `--ci-poll-interval` | `30` | Intervalo entre polls |
 
 ### Review inline e respostas inline
 
-O Reviewer **nunca** posta um comentário único agregado no PR. Cada achado vai como comentário inline no arquivo e linha exatos. Ele abre com as palavras que um revisor fala em voz alta — `Blocking:`, `Suggestion:`, `nit:` — e fecha com um marcador invisível que carrega a severidade para o pipeline:
+O Reviewer **nunca** posta um comentário único agregado no PR. Cada achado vai como comentário inline no arquivo e linha exatos. Ele abre com as palavras que um revisor fala em voz alta — `Blocking:`, `Suggestion:`, `nit:` — e fecha com um marcador invisível que carrega a severidade para o pipeline. Com `--show-me --review`, o mesmo comentário também carrega exatamente um **comment view** (mermaid / file tree / call tree / diff em markdown, nunca HTML) acima do marcador. Sem `--show-me`, os findings ficam só em prosa.
 
 ```html
 <!-- pr-autopilot:severity=blocker -->
