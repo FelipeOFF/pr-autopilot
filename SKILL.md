@@ -19,7 +19,8 @@ not turn `--merge` on. With `--merge` or `--auto`, `land` merges
 bottom-up after the path is opened: the root into the trunk first, then
 the next PR. Existing-chain walks ancestors plus current (not siblings)
 and `land`s that path when merge was requested. A dangling child is
-retargeted at the trunk. When `--cascade` is off, follow the phases in
+retargeted at the trunk even when `--merge` is off; the host merge
+still needs `--merge` / `--auto`. When `--cascade` is off, follow the phases in
 order from Phase 1. Do not skip the verification gates between phases.
 Coordinate subagents via the `Task` tool (or `Agent` tool depending on
 harness). Persist intermediate artifacts to `.pr-autopilot/<pr-number>/`
@@ -324,9 +325,11 @@ Rules that tie the flags together:
   section (existing behavior), not a new review — unless `--resolve` is also
   on, in which case unreplied replies and a posted CI triage comment each get
   one comment view. `--show-me-comments` without `--resolve` briefs and stops
-  (after the review, if `--review` also ran). A phrase like "cascade these
+  (after the review, if `--review` also ran) on a **single-PR** run. Under
+  `--cascade` graph, brief that PR's comments and continue to the next
+  work item — do not abort the forest. A phrase like "cascade these
   tickets" (or equivalent) sets `--cascade`. cascade-flow `--full` does not.
-- `--cascade` does **not** turn on `--merge`. Flags already on this run (`--review`, `--show-me`, `--unslop`, `--draft`, `--resolve`, `--merge`, `--auto`) compose onto each shipped PR (graph) or the current PR only (existing-chain). Merge is the exception: with `--merge` or `--auto`, `land` walks the path bottom-up — graph: root into the trunk before the child; existing-chain: ancestors plus current, not siblings. `--draft` still forbids merge. A standing human `CHANGES_REQUESTED` still blocks merge of that PR.
+- `--cascade` does **not** turn on `--merge`. Flags already on this run (`--review`, `--show-me`, `--show-me-comments`, `--unslop`, `--draft`, `--resolve`, `--merge`, `--auto`) compose onto each shipped PR (graph) or the current PR only (existing-chain). Merge is the exception: with `--merge` or `--auto`, `land` walks the path bottom-up — graph: root into the trunk before the child; existing-chain: ancestors plus current, not siblings. `--draft` still forbids merge. A standing human `CHANGES_REQUESTED` still blocks merge of that PR.
 - Under `--cascade`, `--base` is the **trunk** the root PR targets (repo default if omitted). It is not this PR's parent.
 - `--draft` forces no merge even when `--merge`/`--auto` is set.
 - **No prompts means no consent.** Anything that needs the developer's explicit yes — a business-rule change (`groom-me`), or a comment claiming CI is red for reasons outside the PR — is never done silently in `--auto` or in a non-interactive run. It is recorded as `escalated` instead.
@@ -354,7 +357,7 @@ required check green AND the PR is `MERGEABLE`.
 | `--title` | auto-generated | Override generated title. Ignored in cascade graph mode (§12.2). In existing-chain mode, applies to the current PR only. |
 | `--body` | auto-generated | Override generated body. Starting point for `--show-me` apply; the flag still appends or replaces the PR visual section. Sentence prose still goes through `posted` (§0.4). Ignored in cascade graph mode (§12.2). In existing-chain mode, applies to the current PR only. |
 | `--show-me` | `false` | Append (or replace) a PR visual section on the PR description so a human reviewer can read what the change does before the diff. Combined with `--review`, every Reviewer finding also gets one comment view (mermaid / file tree / call tree / markdown diff, never HTML) on the same line as the finding. Combined with `--resolve`, every Author reply on a thread that still has no reply, and a posted CI triage comment, also get exactly one comment view. Marker stays last. Not implied by `--auto`. Composes onto a cascade ship when passed. |
-| `--show-me-comments` | `false` | Print an operator briefing of comments already on the PR: `path:line` when inline, quoted remark, one comment view. Harness-only markdown. Never posted. Never HTML. Not implied by `--auto`. See §3.7. |
+| `--show-me-comments` | `false` | Print an operator briefing of comments already on the PR: `path:line` when inline, quoted remark, one comment view. Harness-only markdown. Never posted. Never HTML. Not implied by `--auto`. See §3.7. Composes onto a cascade ship when passed. Without `--resolve`, a single-PR run briefs and STOPs; under `--cascade` graph, brief that PR and continue. |
 | `--unslop` | `false` | After humanizer, run posted prose through `unslop` in the invoker's soul (§0.4). Not implied by `--auto`. |
 | `--cascade` | `false` | Opt-in. `plan` then `advance` (§12). IDs or "these tickets": graph mode, a forest. An open work-item PR is reused (restacked if the base is wrong). A failed ship stops the forest. No IDs and current PR base ≠ trunk: existing-chain, the path from the trunk to this PR; siblings stay off the path. Does not turn `--merge` on. With `--merge` or `--auto`, `land` merges bottom-up. Not implied by `--auto`. A phrase like "cascade these tickets" sets it. |
 
@@ -427,7 +430,7 @@ Invocation examples:
 - `pr-autopilot --cascade --merge` → same path, then `land` bottom-up: root into the trunk first; child retargeted if it still pointed at the old head
 - `pr-autopilot --cascade --auto` → review/resolve/CI per item as today, then `land` bottom-up. `--auto` still does not turn `--cascade` on
 - `pr-autopilot --cascade --draft --merge` → PRs may open as draft; none merge
-- `pr-autopilot --cascade --review --show-me --draft` → those flags compose onto each shipped PR (graph) or the current PR only (existing-chain); still no merge
+- `pr-autopilot --cascade --review --show-me --show-me-comments --draft` → those flags compose onto each shipped PR (graph) or the current PR only (existing-chain); still no merge. `--show-me-comments` without `--resolve` briefs each graph ship and continues; it does not STOP the forest
 - "cascade these tickets" → same as `--cascade` (and graph mode: "these tickets")
 - `pr-autopilot --cascade PROJ-12` → Jira source, graph mode, no question
 - `pr-autopilot --cascade #9` → GitHub source (origin GitHub), graph mode, no question
@@ -780,6 +783,8 @@ Route by the flags that are on (`--auto` implies `--review`, `--resolve` and
 - **`--show-me-comments` without `--review` and without `--resolve`** (and
   without `--auto`) → run **§3.7**, then STOP. Print the PR URL and exit.
   No Author. No new posts. `--merge` does not override this stop.
+  Under `--cascade` graph, brief that PR and return to `advance` — do
+  not STOP the forest.
 - **No `--review`, `--resolve`, `--merge` or `--auto`** (and no
   `--show-me-comments`) → STOP here. Print the PR URL and exit. This is the
   default "PR only" mode.
@@ -809,9 +814,11 @@ PR visual section. Not a posted comment view. Never HTML. Never posted.
 
 - `--show-me-comments` without `--resolve` and without `--review`: after
   Phase 1 reuse/create (§3.6), fetch comments, `brief()`, STOP. No Author.
-  No new posts.
+  No new posts. Under `--cascade` graph, `brief()` then return to
+  `advance` — do not STOP the forest.
 - `--show-me-comments --review` without `--resolve`: after Phase 2 posts the
   review (§4.7), `brief()` (including the just-posted findings), STOP.
+  Under `--cascade` graph, `brief()` then return to `advance`.
 - `--show-me-comments --resolve`: after the comment inventory (§5.1 /
   `pr-feedback.md` when it exists this iteration; otherwise the same fetch
   as §5.1 Step 1), `brief()`, **then** the Author addresses findings. Do
@@ -916,8 +923,8 @@ cart.ts
 
 **Examples (completion criterion for brief):**
 
-1. `--show-me-comments` without `--resolve` and without `--review`, existing PR → fetch comments, print briefing, STOP. No Author. No new posts.
-2. `--show-me-comments --review` without `--resolve` → Phase 2 posts the review, then briefing includes those findings, then STOP.
+1. `--show-me-comments` without `--resolve` and without `--review`, existing PR → fetch comments, print briefing, STOP. No Author. No new posts. Single-PR run. Under `--cascade` graph, brief that PR and continue.
+2. `--show-me-comments --review` without `--resolve` → Phase 2 posts the review, then briefing includes those findings, then STOP. Single-PR run. Under `--cascade` graph, brief that PR and continue.
 3. `--show-me-comments --resolve` → briefing after inventory, before the Author touches code. Do not brief after the push.
 4. `--auto --show-me-comments` or no TTY → write `.pr-autopilot/<PR>/operator-briefing.md`, do not prompt, continue.
 5. Inline comment → block starts with `` `path:line` ``, then quoted remark, then exactly one comment view.
@@ -1521,7 +1528,8 @@ not skip the Author when the Reviewer approved.
 - **`--review` without `--resolve`** (and without `--auto`):
   - If `--show-me-comments` is on, run **§3.7** first (the briefing includes
     the just-posted findings). Then STOP. No Author. `--merge` does not
-    override this stop.
+    override this stop. Under `--cascade` graph, brief and return to
+    `advance` — do not STOP the forest.
   - `verdict: APPROVED` and `--merge` on (and `--show-me-comments` off) →
     jump to **Phase 5** (CI). No Author.
   - otherwise → STOP. Print the PR URL and exit. No Author. No `conflict:` / `CI:`
@@ -1554,7 +1562,8 @@ from the test track.
    when non-interactive / `--auto`.
 8. `--show-me-comments --review` without `--resolve` → after the review is posted,
    run §3.7 (includes those findings), STOP. No Author. No new posts beyond the
-   review itself. `--merge` does not override this stop.
+   review itself. `--merge` does not override this stop. Under `--cascade`
+   graph, brief and return to `advance`.
 
 ---
 
@@ -2614,8 +2623,9 @@ Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `sta
 | `--show-me` without `--review` and without `--resolve` | PR visual section only. No new review, no comment views |
 | `--show-me --resolve` | Each unreplied reply gets exactly one comment view; a posted CI triage comment gets exactly one (§5.8). Marker last line. Already-handled threads (action marker or old status tag): no second reply, no new view. NOISE: no reply. Author does not write the PR visual section |
 | `--resolve` without `--show-me` | Replies stay prose-only. No comment view |
-| `--show-me-comments` without `--resolve` and without `--review` | Fetch comments already on the PR, print operator briefing (§3.7), STOP. No Author. No new posts |
-| `--show-me-comments --review` without `--resolve` | Phase 2 posts the review, then brief (including those findings), STOP. No Author |
+| `--show-me-comments` without `--resolve` and without `--review` | Fetch comments already on the PR, print operator briefing (§3.7), STOP. No Author. No new posts. Under `--cascade` graph, brief that PR and continue |
+| `--show-me-comments --review` without `--resolve` | Phase 2 posts the review, then brief (including those findings), STOP. No Author. Under `--cascade` graph, brief that PR and continue |
+| `--cascade --show-me-comments` without `--resolve` | Compose onto each graph ship (same as `--show-me`). Brief that PR's comments; continue to the next work item. Do not STOP the forest |
 | `--show-me-comments --resolve` | Brief after inventory (`pr-feedback.md`), before the Author touches code. Do not brief after the push |
 | `--auto --show-me-comments` or no TTY | Write `.pr-autopilot/<PR>/operator-briefing.md`. Do not prompt. Continue the rest of the pipeline |
 | `--auto` without `--show-me-comments` | No operator briefing |
@@ -2647,10 +2657,10 @@ Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `sta
 | Sibling stacked on the same parent | Not on the path. Not on the short tree. Not merged |
 | `--cascade` without `--merge` / `--auto` | Forest or chain opens (or is walked). None merge |
 | `--cascade --merge` / `--cascade --auto` | `land` bottom-up: root into the trunk first, then the next PR. Graph: child retargeted if it still pointed at the old head. Existing-chain: ancestors plus current; siblings stay open |
-| Dangling child, `--merge` / `--auto` | Retarget trunk, `git merge` trunk into the feature (no force-push), re-verify, then merge |
+| Dangling child | Retarget trunk, `git merge` trunk into the feature (no force-push), re-verify — even when `--merge` is off. Host merge of that PR still only with `--merge` / `--auto` |
 | `--cascade --draft --merge` | PRs may open as draft. None merge |
 | Existing-chain `--merge` / `--auto` | Walk the path. `land` ancestors then current. Siblings stay |
-| Existing-chain `--review` / `--resolve` / `--show-me` / `--unslop` | Current PR only. Not ancestors. Not siblings |
+| Existing-chain `--review` / `--resolve` / `--show-me` / `--show-me-comments` / `--unslop` | Current PR only. Not ancestors. Not siblings |
 | No current PR, or current PR already on the trunk, no IDs | Not existing-chain. Fall through in `plan` |
 | Graph mode current feature branch | Ignored. Not the parent and not the base |
 | `--show-me` Author round with no push or unchanged diff | Leave the description alone |
@@ -2837,8 +2847,8 @@ pr-autopilot --cascade --merge
 # Drafts may open; none merge
 pr-autopilot --cascade --draft --merge
 
-# Compose review / visual / draft onto each shipped PR (still no merge)
-pr-autopilot --cascade --review --show-me --draft
+# Compose review / visual / comments / draft onto each shipped PR (still no merge)
+pr-autopilot --cascade --review --show-me --show-me-comments --draft
 
 # Trunk is develop
 pr-autopilot --cascade --base=develop
@@ -2921,8 +2931,9 @@ then a count line:
 ```
 
 `--show-me-comments` without `--resolve` (after the review, if `--review` also
-ran) then STOPs. With `--resolve`, that count line prints after inventory and
-before the Author addresses findings.
+ran) then STOPs on a single-PR run. Under `--cascade` graph, brief that PR
+and continue to the next work item. With `--resolve`, that count line prints
+after inventory and before the Author addresses findings.
 
 Quiet operator-briefing-only run (`--show-me-comments` on an existing PR):
 
@@ -3240,6 +3251,7 @@ test -d .beads
 bd show <id> --json
 bd ready --json
 bd dep tree <id>
+bd dep <id>              # native blocker
 ```
 
 **Jira items** (source=jira — only with a repo project or `PROJ-123` in
@@ -3256,9 +3268,11 @@ global Jira MCP as the reason source is jira.
 - **Body blockers:** under `## Blocked by` / `## Blocked-by` (until the
   next `##` heading), collect `#N` that are still open. `none` / empty /
   all closed → no body blocker.
-- **Native blockers:** open issues in `blockedBy`. Closed → ignore.
-  If the schema rejects `blockedBy`, parse the body heading and
-  continue. Do not abort.
+- **Native blockers:** GitHub: open issues in `blockedBy`. Closed →
+  ignore. If the schema rejects `blockedBy`, parse the body heading
+  and continue. Do not abort. Beads: `bd dep` is the native blocker
+  (same stacking-parent rules). Jira: body `## Blocked by` is enough
+  in v1; native issue links are not in v1.
 - **Stacking parent.** An open blocking *work item* that is in `items`.
   Ignore a spec/epic — that is the container, not a stacking parent. No
   such parent → root (base = trunk). One → child of that item. Several
@@ -3341,15 +3355,17 @@ on(advance)
       --show-me-comments compose onto the current PR only
       (existing pipeline, reuse §3.2). Not ancestors. Not siblings.
     if those stages halted → halt; do not land
-    land(plan)     # no-op unless --merge / --auto; --draft forbids merge
+    land(plan)     # retarget a dangling child even without --merge;
+                   # host merge only with --merge / --auto; --draft forbids merge
     → done
-  next ready item has open PR → reuse
-  next ready item is ready-for-human and not named → skip
   last_result is halt → halt the forest
+                        # do not reuse, do not start the next
   requested stages of current unfinished → do not start the next
+  no ready item left → land(plan) then done
+                        # land retargets a dangling child even without
+                        # --merge; host merge only with --merge / --auto
   next ready item has open PR → reuse (restack base if needed)
   next ready item is ready-for-human and not named → skip
-  no ready item left → land(plan) then done
   next is a child and parent PR does not exist → do not start the child
   else → ship: existing pipeline, host base = parent head or trunk
                (skip Phase 6; land after the path is opened)
@@ -3431,8 +3447,9 @@ gh pr edit <PR> --base <intended>
    (verbatim). Root: do not add that line. A restack merge that cannot
    resolve safely is a halt (§5.3).
 
-3. Enter **§3.2** on that PR. `--show-me` still apply. Then run the
-   requested stages except Phase 6. Record `items[].pr` and
+3. Enter **§3.2** on that PR. `--show-me` still apply.
+   `--show-me-comments` still brief. Then run the requested stages
+   except Phase 6. Record `items[].pr` and
    `status=opened`. Print the tree (§12.4). `last_result=reuse` if
    those stages finished without halt; else halt. After a finished
    reuse, `land` ready PRs. If `land` halted, stop.
@@ -3486,9 +3503,12 @@ across siblings.
      (`<parent>` is the stacking work-item id). Keep that line
      verbatim — do not humanize or unslop it.
    - Flags already on this run compose onto that PR: `--review`,
-     `--resolve`, `--merge`, `--auto`, `--show-me`, `--unslop`,
-     `--draft`, `--merge-strategy`. `--cascade` does not turn merge on.
-     `--draft` still forces no merge. Phase 6 waits for `land`.
+     `--resolve`, `--merge`, `--auto`, `--show-me`, `--show-me-comments`,
+     `--unslop`, `--draft`, `--merge-strategy`. `--cascade` does not
+     turn merge on. `--draft` still forces no merge. Phase 6 waits for
+     `land`. `--show-me-comments` without `--resolve` briefs that PR's
+     comments and continues to the next work item; it does not STOP
+     the forest.
 4. Print the cascade tree (§12.4). Record `items[].pr` and
    `status=opened`. If the requested (non-merge) stages finished
    without halt, `last_result=ship`, `land` ready PRs, and call
@@ -3496,16 +3516,18 @@ across siblings.
    — do not start the next item.
 
 Phase 1 on the work-item branch is the existing create path. `--show-me`
-apply, `--draft`, review, resolve, CI — unchanged. Host base is the
-trunk for a root and the parent head for a child. Merge is `land`.
+apply, `--show-me-comments` brief, `--draft`, review, resolve, CI —
+unchanged. Host base is the trunk for a root and the parent head for a
+child. Merge is `land`.
 
 **Existing-chain `advance`.** The PRs on the path already exist. Load
 `cascade-flow` once (§12.3). Print the path tree. Do not implement
 work items. Graph-mode restack of a wrong work-item base is reuse
 above. With `--merge` or `--auto`, `land` the path bottom-up
 (ancestors then current). Siblings stay. A dangling child is
-retargeted at the trunk; `git merge` the trunk into the feature
-(no force-push); re-verify; then merge if still requested.
+retargeted at the trunk even when `--merge` is off; `git merge`
+the trunk into the feature (no force-push); re-verify. The host
+merge of that PR still only happens with `--merge` / `--auto`.
 `--draft` still forbids merge. Out-of-order merge of the current
 PR into its still-open parent is what `--cascade` exists to stop.
 
@@ -3514,6 +3536,11 @@ hold. `--cascade` does not turn this on.
 
 ```
 on(land)
+  # Dangling child in the path: retarget + git merge trunk in +
+  # re-verify even when --merge is off. Host merge stays gated.
+  for each dangling child in the path   # base != trunk, parent PR gone
+    retarget_to_trunk(pr)
+
   if --draft → do not merge any PR; return
   if not (--merge or --auto) → do not merge any PR; return
 
@@ -3575,9 +3602,10 @@ on(retarget_to_trunk)
 `--force-with-lease` remains allowed only on the **feature** branch
 when the user asked `--merge-strategy=rebase` (§5.3). Dangling
 retarget is always `git merge` of the trunk into the feature, even
-then. Never on the trunk. A child whose base is already the trunk
-(host auto-retargeted) skips `retarget_to_trunk` and goes to CI +
-merge.
+then, and even when `--merge` is off. Never on the trunk. A child
+whose base is already the trunk (host auto-retargeted) skips
+`retarget_to_trunk` and goes to CI; host merge only with `--merge`
+/ `--auto`.
 
 ### 12.3 `cascade-flow`
 
@@ -3692,9 +3720,11 @@ Statuses: `opened` (created or reused), `skipped`, `failed`,
    and does not close `#16`. Short tree printed. No merge.
 3. Same as 2 with `--title` / `--body` set → those flags are not stamped
    on the work-item PR. Title and body still come from `#17`.
-4. Same as 2 with `--review` / `--show-me` / `--unslop` / `--draft`
-   passed → those flags compose onto that PR. `--cascade` does not turn
-   `--merge` on.
+4. Same as 2 with `--review` / `--show-me` / `--show-me-comments` /
+   `--unslop` / `--draft` passed → those flags compose onto that PR.
+   `--cascade` does not turn `--merge` on. `--show-me-comments`
+   without `--resolve` briefs that PR and continues; it does not
+   STOP the forest.
 5. `#17` ready-for-agent unblocked, `#18` ready-for-human and not named
    → `#18` skipped; `#17` shipped.
 6. `--cascade` on, `cascade-flow` missing → alert +
@@ -3734,11 +3764,11 @@ Statuses: `opened` (created or reused), `skipped`, `failed`,
     source was picked.
 21. Work item `#9` already has an open PR against the wrong base →
     `advance`: reuse that PR, restack onto the parent head or trunk.
-    No second PR. Spec example 9.
+    No second PR.
 22. `#9` verification fails (or `--review` without `--resolve` and a
     BLOCKER) → `last_result=halt`. `#10` (independent root) is not
-    started. Tree lists `#9` failed and later items pending. Spec
-    example 10.
+    started. Tree lists `#9` failed and later items pending. Do not
+    reuse, skip, or ship them.
 23. `--cascade --review` on `#9` then `#10`; `#9` Phase 2 still
     running → do not start `#10` until `#9`'s requested stages
     finished without halt.
@@ -3748,13 +3778,13 @@ Statuses: `opened` (created or reused), `skipped`, `failed`,
     `#13` is not on the path. Short tree prints that path with
     `(current)` on `#12`. No merge. No new work-item PR.
 25. Same as 24 with `--cascade --merge` or `--cascade --auto` → `land`
-    merges `#11` then `#12`. `#13` stays open. Spec example 7.
+    merges `#11` then `#12`. `#13` stays open.
 26. Same as 24 with `--title` / `--body` set → those flags apply to
     `#12` only. Not to `#11`. Not to `#13`.
-27. Same as 24 with `--review` / `--show-me` / `--unslop` → those
-    flags compose onto `#12` only. Not ancestors. Not siblings.
-    `--merge` on the same run still `land`s the path (ancestors plus
-    current).
+27. Same as 24 with `--review` / `--show-me` / `--show-me-comments` /
+    `--unslop` → those flags compose onto `#12` only. Not ancestors.
+    Not siblings. `--merge` on the same run still `land`s the path
+    (ancestors plus current).
 28. Origin GitLab, current MR stacked on another MR, `--cascade` with
     no IDs → existing-chain on GitLab MRs. Same path rule. Same
     sibling rule. `--cascade --merge` lands that MR path the same way.
@@ -3762,15 +3792,17 @@ Statuses: `opened` (created or reused), `skipped`, `failed`,
     `#11` → ship `#11` (base = trunk) then `#12` (base = `#11`'s
     head). `land` merges `#11` into the trunk first; if `#12` still
     pointed at the old head, retarget trunk, `git merge` trunk into
-    the feature (no force-push), re-verify, then merge `#12`. Spec
-    example 6.
+    the feature (no force-push), re-verify, then merge `#12`.
 30. `--cascade` without `--merge` and without `--auto` → forest or
     chain opens (or is walked). None merge.
 31. Dangling child: parent already merged, current PR still targets
-    the old head, `--cascade --merge` → retarget trunk, `git merge`
-    trunk into the feature, re-verify, then merge. Spec example 8.
-32. `--cascade --draft --merge` → PRs may open as draft; `land` is a
-    no-op; none merge. Spec example 14.
+    the old head → retarget trunk, `git merge` trunk into the
+    feature, re-verify, even when `--merge` is off. With
+    `--cascade --merge`, then merge. Without `--merge` / `--auto`,
+    the host merge does not run.
+32. `--cascade --draft --merge` → PRs may open as draft; `land` does
+    not merge; none merge. A dangling child on that path is still
+    retargeted.
 33. Standing human `CHANGES_REQUESTED` on a PR in the path → that PR
     is not merged, no matter how green CI is. Halt. Later items
     pending.
