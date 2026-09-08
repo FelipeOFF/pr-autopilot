@@ -1,6 +1,6 @@
 ---
 name: pr-autopilot
-description: Orchestrates the full lifecycle of a Pull Request — creation, two-track multi-agent code review (deep maintainability audit for code judo + test-value assessment when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"), or to cascade GitHub work items into PRs against the trunk ("cascade these tickets", "/pr-autopilot --cascade"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
+description: Orchestrates the full lifecycle of a Pull Request — creation, two-track multi-agent code review (deep maintainability audit for code judo + test-value assessment when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"), or to cascade work items into PRs against the trunk ("cascade these tickets", "/pr-autopilot --cascade"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
 argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--show-me-comments] [--unslop] [--cascade] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
 ---
 
@@ -352,7 +352,7 @@ required check green AND the PR is `MERGEABLE`.
 | `--show-me` | `false` | Append (or replace) a PR visual section on the PR description so a human reviewer can read what the change does before the diff. Combined with `--review`, every Reviewer finding also gets one comment view (mermaid / file tree / call tree / markdown diff, never HTML) on the same line as the finding. Combined with `--resolve`, every Author reply on a thread that still has no reply, and a posted CI triage comment, also get exactly one comment view. Marker stays last. Not implied by `--auto`. Composes onto a cascade ship when passed. |
 | `--show-me-comments` | `false` | Print an operator briefing of comments already on the PR: `path:line` when inline, quoted remark, one comment view. Harness-only markdown. Never posted. Never HTML. Not implied by `--auto`. See §3.7. |
 | `--unslop` | `false` | After humanizer, run posted prose through `unslop` in the invoker's soul (§0.4). Not implied by `--auto`. |
-| `--cascade` | `false` | Opt-in. `plan` then `advance` (§12): a forest of GitHub work items. Independent items are roots against the trunk. A blocked child stacks on the parent PR head. Not implied by `--auto`. A phrase like "cascade these tickets" sets it. |
+| `--cascade` | `false` | Opt-in. `plan` then `advance` (§12): pick tracker source from this repo or IDs, then ship a forest. Independent items are roots against the trunk. A blocked child stacks on the parent PR head. Not implied by `--auto`. A phrase like "cascade these tickets" sets it. |
 
 Boolean flags accept a bare form (`--review`, `--unslop`, `--show-me`,
 `--show-me-comments`, `--cascade`) or an explicit value (`--review=true` /
@@ -415,9 +415,11 @@ Invocation examples:
 - `pr-autopilot --unslop --review` → each Reviewer finding body is humanized then unslopped
 - `pr-autopilot --unslop --resolve` → each Author reply (and a posted CI triage comment) is humanized then unslopped
 - `pr-autopilot --auto --unslop` → full hands-off **and** unslop on every posted prose surface `--auto` already writes
-- `pr-autopilot --cascade` → plan/advance; a forest of GitHub work items. Independent items are roots against the trunk; a blocked child stacks on the parent head (`--auto` does not imply this)
+- `pr-autopilot --cascade` → plan/advance; pick source from this repo or IDs, then a forest of work items. Independent items are roots against the trunk; a blocked child stacks on the parent head (`--auto` does not imply this)
 - `pr-autopilot --cascade --review --show-me --draft` → those flags compose onto each shipped PR; still no merge
 - "cascade these tickets" → same as `--cascade`
+- `pr-autopilot --cascade PROJ-12` → Jira source, no question
+- `pr-autopilot --cascade #9` → GitHub source (origin GitHub), no question
 
 If no flags are present and the invocation is interactive, the orchestrator MAY
 prompt once: "Which mode? [1] PR only (default)  [2] PR + merge  [3] PR + review
@@ -612,8 +614,9 @@ plan checklists, paths, and backticks stay intact. `--title` only overrides
 the title; the body still follows this section (generated or `--body`).
 
 When this create is a cascade graph-mode **ship** (§12.2), ignore `--title`
-and `--body`. Generate both from the work item. The body must include
-`Closes #<work-item>` (GitHub) and must not close the parent spec. A
+and `--body`. Generate both from the work item. The body must close the
+work item (GitHub/GitLab: `Closes #<id>`; Jira: the issue key in
+title/body; beads: the bead id) and must not close the parent spec. A
 child body also includes `Stacked on: #<parent> (merge after)`.
 
 If `--show-me` is on, run **§3.4** on this body **after** `posted` and
@@ -2589,7 +2592,18 @@ Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `sta
 | `--cascade` and `cascade-flow` missing | Alert + `npx skills add FelipeOFF/skills --skill=cascade-flow`. Condensed fallback in §12.3. PR still opens |
 | Cascade graph mode `--title` / `--body` | Not stamped onto the work-item PR. Title and body come from the work item |
 | `ready-for-human`, id not named | Skip. Do not implement. Do not open a PR |
-| Spec/epic in this ticket's happy path | Not a PR. Children vs one-PR ask is later ticket #19 |
+| Spec/epic in this ticket's happy path | Not a PR |
+| Spec/epic id only, interactive | Ask once: children vs one PR. Do not ship until answered |
+| Spec/epic id only, `--auto` or no TTY | Halt. Do not guess. Do not ship |
+| Origin GitHub, global Jira MCP, no `PROJ-*` | GitHub source. No Jira question |
+| Origin GitLab | GitLab issues are the source |
+| `.beads/` present | Beads are a detected source |
+| Prompt `PROJ-12` | Jira source, no question |
+| Prompt `#9` | GitHub source (GitLab if origin is GitLab), no question |
+| Prompt is a `bd` id or a Cairn ticket | Beads source, no question. Cairn is not a fourth tracker |
+| Two sources in this repo, no ids | Ask once which graph (halt if `--auto` / no TTY) |
+| Zero sources, current PR on the trunk | Ask once which work items (halt if `--auto` / no TTY) |
+| Tracker config file | Do not add one. Source is this repo or the IDs in the prompt |
 | `--cascade` while on `main`/`master` | Allowed in graph mode: cut a new branch from trunk or the parent head. Do not abort preflight on the current branch |
 | Several unblocked work items | One PR per item, each targeting the trunk. Do not invent a line |
 | Work item blocked by another in `items` | Child PR base is the parent head, not the trunk. Do not start the child until the parent PR exists |
@@ -2752,9 +2766,9 @@ pr-autopilot --auto --unslop
 # Compose: unslop on title/body, findings, and replies
 pr-autopilot --review --resolve --unslop
 
-# Cascade (opt-in; --auto does not imply this): forest of GitHub work
-# items. Independent items are roots against the trunk. A blocked child
-# stacks on the parent head. Current feature branch is not the parent.
+# Cascade (opt-in; --auto does not imply this): pick source from this
+# repo or IDs, then a forest of work items. Independent items are roots
+# against the trunk. A blocked child stacks on the parent head.
 pr-autopilot --cascade
 
 # Same flag via a phrase
@@ -2762,6 +2776,7 @@ pr-autopilot --cascade
 
 # Named IDs: graph mode even if the current PR is stacked
 pr-autopilot --cascade #9 #10 #11 #12
+pr-autopilot --cascade PROJ-12
 
 # Compose review / visual / draft onto each shipped PR (still no merge)
 pr-autopilot --cascade --review --show-me --draft
@@ -2886,6 +2901,15 @@ main
 [1/6] PR #43 created → https://github.com/acme/api/pull/43
 ```
 
+A cascade ask that `--auto` (or no TTY) cannot make prints the question
+and halts:
+
+```
+[cascade] halt: spec #16 only — children vs one PR? (--auto, no guess)
+[cascade] halt: two sources (github, beads) — which graph? (--auto, no guess)
+[cascade] halt: zero sources — which work items? (--auto, no guess)
+```
+
 On any halt, print: phase, reason, the artifact path the user should inspect, and 1–2 suggested next actions. On an `escalated` halt (business-rule conflict / unfixable CI), name exactly what needs a human decision.
 
 ---
@@ -2901,18 +2925,24 @@ When the flag is off, this section does not run. Start at Phase 1 on the
 current branch.
 
 When the flag is on, do **not** start Phase 1 on the current branch. Run
-`plan`, then loop `advance` until `done` (or a later-ticket halt/ask).
+`plan`, then loop `advance` until `done` (or a halt/ask).
 Each **ship** is phases 1–6 on that work item, with host base = parent
 head or trunk.
 
-A **work item** (GitHub, this ticket): an issue labelled `ready-for-agent`
-that has a parent or a task type. A spec/epic is the container — it does
-not get a PR. `ready-for-human` is skipped unless that ID was named.
+A **work item**: a GitHub or GitLab issue, a bead, or a Jira issue,
+labelled `ready-for-agent`, with a parent or a task type. A spec/epic
+is the container — it does not get a PR unless the spec-only ask
+answers "one PR". `ready-for-human` is skipped unless that ID was
+named.
 
 **Trunk.** `--base` if passed, else the repo default branch:
 
 ```bash
+# GitHub
 gh repo view --json defaultBranchRef -q .defaultBranchRef.name
+
+# GitLab
+glab api projects/:id --jq .default_branch
 ```
 
 **Graph mode** ignores the current feature branch. IDs or a phrase like
@@ -2926,23 +2956,68 @@ items into a line. The spec/epic parent is the container, not a stacking
 parent. v1 is serial: roots first (tie-break: id number); a child starts
 only after the parent PR exists. One worktree at a time.
 
+**Source** is this repo, or the IDs in the prompt. A globally installed
+MCP is not a source. Cairn tickets are beads, not a fourth tracker.
+Do not add a tracker config file.
+
 ### 12.1 `plan(invocation, repo, current_pr)`
 
 `plan` is the seam. Done means the examples in §12.5 hold.
 
 ```
+on(source)
+  detected = []
+  origin is GitHub     → +github
+  origin is GitLab     → +gitlab
+  .beads/ exists       → +beads
+  this repo has a Jira project → +jira
+    # a Jira project key bound to this repo (this workspace's Jira
+    # tool configured for this repo, or the repo's own documented
+    # project key). A Jira MCP installed globally is not enough.
+  Cairn tickets        → beads (never a separate tracker)
+  never: Linear, Asana, mixed graphs, MCP-as-detection
+  never write a tracker config file
+
+  ids in the prompt pick the source without asking:
+    #N            → github (origin GitHub) or gitlab (origin GitLab)
+    PROJ-123      → jira
+    bd id         → beads
+    Cairn ticket  → beads
+    two trackers named → ask once (halt if --auto / no TTY)
+
+  no disambiguating ids:
+    one detected  → that source
+    two+ detected → ask which graph (halt if --auto / no TTY)
+    zero detected → fall through in plan
+
 on(plan)
   cascade off → not this feature
-  IDs or "these tickets" → mode=graph, items=forest(source, ids)
+  IDs or "these tickets" → mode=graph, source=pick(repo, ids),
+                           items=forest(source, ids)
     IDs win even if current PR base ≠ trunk
     ignore current feature branch
-    this ticket: origin GitHub, one or several work items
-    GitLab / beads / Jira / two sources / spec-only ask: later ticket #19
+    spec-only id → ask children vs one PR
+                   (halt if --auto / no TTY)
   else if current PR base ≠ trunk → mode=existing-chain   # later ticket #21
-  else if zero or two+ sources without ids → ask (halt if no TTY / --auto)
-                                                    # later ticket #19
-  else → ask which work items                       # later ticket #19
+  else if two+ sources without ids → ask which graph
+                                     (halt if --auto / no TTY)
+  else → ask which work items
+         (halt if --auto / no TTY)
 ```
+
+**Ask once.** Interactive: one question, then continue from the answer.
+`--auto` or no TTY: print the question, halt, do not guess, do not ship.
+
+- spec-only id → children of `<id>`, or one PR for the spec?
+- two+ sources, no ids → which graph: `<a>` or `<b>`?
+- zero sources, or one source without ids and the current PR already
+  on the trunk → which work items?
+
+A spec-only prompt is **only** that spec/epic id: no child ids, no
+"these tickets". "these tickets" plus a parent spec is graph mode on
+the children, not this ask. Answering "one PR" ships the spec as the
+one work item. Answering "children" sets `items` to the ready-for-agent
+children (forest + stacking as above).
 
 **Parse the flag** like `--review`: `--cascade` or `--cascade=true` is on;
 `--cascade=false` cancels a phrase. A **clear cascade phrase** also sets
@@ -2951,7 +3026,10 @@ it (case-insensitive): "cascade these tickets", "cascade those issues",
 not a cascade phrase. cascade-flow `--full` / a panorama is not a
 cascade phrase.
 
-**GitHub items** (origin is GitHub; a global Jira MCP is not a source):
+**Items** — same ready-for-agent / parent-or-task / skip ready-for-human
+/ unblocked rules on every source.
+
+**GitHub items** (source=github). A global Jira MCP is not a source:
 
 ```bash
 # Named id (blockedBy / blocking are native issue dependencies)
@@ -2972,11 +3050,35 @@ gh api graphql -f query='
   }'
 ```
 
+**GitLab items** (source=gitlab):
+
+```bash
+glab issue view <N>
+glab api "projects/:id/issues/<iid>"
+# labels, epic/parent, issue_links (blocks)
+```
+
+**Beads items** (source=beads; `.beads/` present). Cairn tickets use
+this path — do not treat Cairn as a fourth tracker:
+
+```bash
+test -d .beads
+bd show <id> --json
+bd ready --json
+bd dep tree <id>
+```
+
+**Jira items** (source=jira — only with a repo project or `PROJ-123` in
+the prompt). Fetch the named key, or ready-for-agent issues in the repo
+project, with the Jira API/CLI/MCP bound to that project. Do not treat a
+global Jira MCP as the reason source is jira.
+
 - `ready-for-agent` + (parent or task type) → work item.
 - `ready-for-human` and the id was **not** named → skip (not in `items`,
   or marked skip for `advance`).
 - Spec/epic (container, no task type, or the parent of the work items) →
-  not a PR in this ticket's happy path.
+  not a PR. A prompt that is **only** that spec id → the spec-only ask,
+  not a silent ship.
 - **Body blockers:** under `## Blocked by` / `## Blocked-by` (until the
   next `##` heading), collect `#N` that are still open. `none` / empty /
   all closed → no body blocker.
@@ -3000,7 +3102,7 @@ Write `.pr-autopilot/cascade/plan.md` (typed artifact, this invocation):
 cascade: true
 mode: graph
 trunk: <branch>
-source: github
+source: github | gitlab | beads | jira
 ---
 
 # Forest plan
@@ -3008,12 +3110,14 @@ source: github
 ## Items
 - #<id> ready-for-agent unblocked parent=#<spec|none> → ship (base=trunk)
 - #<id> ready-for-agent blocked-by=#<blocker> parent=#<spec|none> → ship (base=<blocker-head>, after #<blocker> PR)
+  # id shape follows source: #17 | PROJ-12 | bd-<id>
 ```
 
 Also write `.pr-autopilot/cascade/state.json`:
 `{cascade: true, mode, trunk, source, items, last_result}`.
 `cascade` is from this invocation only. Each item records `id`, stacking
-parent (or none), and intended host base.
+parent (or none), and intended host base. On an ask/halt, do not guess
+`items`. `source` may be unset until the question is answered.
 
 ### 12.2 `advance(plan, last_result)`
 
@@ -3068,8 +3172,9 @@ open a PR. Do not implement it.
    - `--title` / `--body` **not** stamped (ignore them in graph mode)
    - Title from the work item (commit convention)
    - Body from the work item (Summary / Changes / Test plan), humanized
-     (§0.1), plus `Closes #<id>` (GitHub). Do **not** close the parent
-     spec (`Closes #<spec>` stays off)
+     (§0.1). Close the work item, not the parent spec: GitHub/GitLab
+     `Closes #<id>`; Jira the issue key in title/body; beads the bead
+     id. `Closes #<spec>` / parent epic stays off.
    - Child body also includes `Stacked on: #<parent> (merge after)`
      (`<parent>` is the stacking work-item id). Keep that line
      verbatim — do not humanize or unslop it.
@@ -3114,6 +3219,8 @@ chain is later ticket #22. This ticket still prints the fallback.
 
 When `--cascade` is on, print one short tree. Not cascade-flow `--full`.
 Roots hang off the trunk. A child hangs off its parent with `└→`.
+
+`source` is the picked tracker (`github` / `gitlab` / `beads` / `jira`).
 
 ```
 cascade graph  trunk=main  source=github
@@ -3170,6 +3277,26 @@ reuse: later ticket #20.
    win). Do not walk the existing chain.
 10. Child PR body contains `Stacked on: #<parent> (merge after)` and
     `Closes #<child>`. It does not close the spec.
+11. `pr-autopilot --cascade` with only the spec id, interactive → ask
+    children vs one PR. `--auto --cascade` with only the spec id →
+    halt, no guess.
+12. Origin GitHub, Jira MCP installed globally, `--cascade` "these
+    tickets", no `PROJ-*` ids → GitHub source, no Jira question.
+13. Origin GitLab, `--cascade` → GitLab issues are the source. No GitHub
+    question.
+14. `.beads/` present → beads are a detected source. A Cairn ticket is
+    beads, not a fourth tracker.
+15. Prompt `PROJ-12` → Jira source, no question.
+16. Prompt `#9` (origin GitHub) → GitHub source, no question.
+17. Prompt is a `bd` id → beads source, no question.
+18. Two sources in this repo and no disambiguating ids, interactive →
+    one question which graph. Same case with `--auto --cascade` → halt,
+    no guess.
+19. Zero sources and the current PR already on the trunk, interactive →
+    one question which work items. Same case with `--auto --cascade` →
+    halt, no guess.
+20. No tracker config file. A globally installed MCP is never why a
+    source was picked.
 
 Do not test: reuse/halt (#20), existing-chain (#21), merge-bottom-up
-(#22), GitLab/beads/Jira/spec-only ask (#19).
+(#22).
