@@ -1,7 +1,7 @@
 ---
 name: pr-autopilot
-description: Orchestrates the full lifecycle of a Pull Request — creation, two-track multi-agent code review (deep maintainability audit for code judo + test-value assessment when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
-argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
+description: Orchestrates the full lifecycle of a Pull Request — creation, two-track multi-agent code review (deep maintainability audit for code judo + test-value assessment when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"), or to cascade GitHub work items into PRs against the trunk ("cascade these tickets", "/pr-autopilot --cascade"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
+argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--cascade] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
 ---
 
 # pr-autopilot
@@ -12,7 +12,14 @@ End-to-end PR pipeline: **create → (review → respond → re-review loop) →
 
 **Phase 2 review runs two parallel tracks** when `--review` or `--auto` is set: (A) a **code track** that runs a deep maintainability audit for code judo, abstraction quality, file size, spaghetti growth, and structural simplification (the approval bar), and (B) a **test track** that evaluates tests in the PR diff by value and identifies removal candidates (tautologies, always-green, unjustified cost). Both tracks' findings are merged into one `review-report.md` and posted as one review on the PR. The test track only runs when the PR diff contains test files; otherwise it is skipped and only the code track runs.
 
-This skill is **rigid**. Follow the phases in order. Do not skip the verification gates between phases. Coordinate subagents via the `Task` tool (or `Agent` tool depending on harness). Persist intermediate artifacts to `.pr-autopilot/<pr-number>/` so iterations and re-runs are recoverable.
+This skill is **rigid**. When `--cascade` is on, run `plan` then `advance`
+(§12) before Phase 1 on the current branch. Each **ship** is phases 1–6
+with host base = trunk. When `--cascade` is off, follow the phases in
+order from Phase 1. Do not skip the verification gates between phases.
+Coordinate subagents via the `Task` tool (or `Agent` tool depending on
+harness). Persist intermediate artifacts to `.pr-autopilot/<pr-number>/`
+(and `.pr-autopilot/cascade/` under `--cascade`) so iterations and re-runs
+are recoverable.
 
 ---
 
@@ -30,7 +37,8 @@ and anything they spawn.
 
 Invoke them with the `Skill` tool — `skill: "humanizer"`, `skill: "ponytail"`,
 `skill: "show-me"`. Some harnesses namespace ponytail as `ponytail:ponytail`; try
-the plain name first and fall back. **If a skill is not installed, the rules in
+the plain name first and fall back. Under `--cascade`, also load `cascade-flow`
+(§12.3). **If a skill is not installed, the rules in
 §0.1, §0.2 and §3.4 still bind.** They are the part of each skill this pipeline
 depends on, written out so an agent in a bare harness behaves the same way.
 Subagent prompt templates (§4.5, §5.6) carry their own copy of house style for
@@ -156,7 +164,8 @@ on at once with `--auto`.
 | **PR + review** | `--review` | Phase 1 → Phase 2 (Reviewer posts inline comments) → STOP. |
 | **Resolve what's already there** | `--resolve` | Phase 1 → **Phase 3** (`Trigger=pr-feedback`): the Author triages every comment already on the PR — human or bot — resolves conflicts and fixes CI → Phase 5 → STOP before merge. **No new AI review is posted.** |
 | **Review + resolve** | `--review --resolve` | Phase 1 → Phase 2 → Phase 3 → loop → STOP before merge. Add `--merge` to merge on green CI. |
-| **Auto (full hands-off)** | `--auto` | Everything on: review + resolve + wait ALL CI + merge, no prompts. Resolves merge conflicts and fixes failing CI along the way. Halts or escalates only on a guardrail it must not cross. |
+| **Auto (full hands-off)** | `--auto` | Everything on: review + resolve + wait ALL CI + merge, no prompts. Resolves merge conflicts and fixes failing CI along the way. Halts or escalates only on a guardrail it must not cross. Does **not** turn on `--cascade`. |
+| **Cascade** | `--cascade` | `plan` then `advance` (§12). Each ship is one of the rows above on a work-item branch, host base = trunk. `--auto` does not turn this on. A phrase like "cascade these tickets" does. |
 
 Rules that tie the flags together:
 
@@ -165,6 +174,9 @@ Rules that tie the flags together:
 - `--merge` is what enables the merge. Without it (and without `--auto`), the pipeline always stops before merging, no matter how green CI is.
 - `--auto` is shorthand for `--review --resolve --merge` plus a "never prompt for confirmation" semantic **and** the aggressive-resolution behavior: in `--auto` (and any `--resolve`) run, the Author resolves merge conflicts and fixes failing CI, not just review comments.
 - `--auto` does **not** turn on `--show-me`. The PR visual section is a separate opt-in.
+- `--auto` does **not** turn on `--cascade`. A stacked forest is a separate opt-in. A phrase like "cascade these tickets" (or equivalent) sets `--cascade`. cascade-flow `--full` does not.
+- `--cascade` does **not** turn on `--merge`. Flags already on this run (`--review`, `--show-me`, `--unslop`, `--draft`, `--resolve`, `--merge`, `--auto`) compose onto each shipped PR.
+- Under `--cascade`, `--base` is the **trunk** the root PR targets (repo default if omitted). It is not this PR's parent.
 - `--draft` forces no merge even when `--merge`/`--auto` is set.
 - **No prompts means no consent.** Anything that needs the developer's explicit yes — a business-rule change (`groom-me`), or a comment claiming CI is red for reasons outside the PR — is never done silently in `--auto` or in a non-interactive run. It is recorded as `escalated` instead.
 
@@ -177,30 +189,38 @@ required check green AND the PR is `MERGEABLE`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--auto` | `false` | Full hands-off. Turns on `--review`, `--resolve`, `--merge`, disables prompts, and lets the Author resolve conflicts + fix CI. |
+| `--auto` | `false` | Full hands-off. Turns on `--review`, `--resolve`, `--merge`, disables prompts, and lets the Author resolve conflicts + fix CI. Does **not** turn on `--show-me` or `--cascade`. |
 | `--review` | `false` | Run the Reviewer subagent (inline comments). |
 | `--resolve` | `false` | Run the Author subagent — triages every comment already on the PR (human and bot), addresses the actionable ones, resolves merge conflicts, and fixes failing CI. Does **not** imply `--review`; combine them to also post a fresh review first. |
-| `--merge` | `false` | Enable auto-merge once every required check is green and the PR is `MERGEABLE`. Without it (or `--auto`) the pipeline stops before merge. |
+| `--merge` | `false` | Enable auto-merge once every required check is green and the PR is `MERGEABLE`. Without it (or `--auto`) the pipeline stops before merge. `--cascade` does not turn this on. |
 | `--max-iterations` | `2` | Max review→respond (and CI-fix) cycles before escalating to the user. |
 | `--merge-strategy` | `squash` | One of `squash`, `merge`, `rebase`. |
-| `--base` | auto-detect | Target branch. Defaults to repo default branch (`main`/`master`/`trunk`). |
-| `--draft` | `false` | Open PR as draft. Forces no merge. |
+| `--base` | auto-detect | Target branch. Defaults to repo default branch (`main`/`master`/`trunk`). Under `--cascade`, this is the **trunk** the root PR targets, not a child's parent. |
+| `--draft` | `false` | Open PR as draft. Forces no merge. Composes onto a cascade ship when passed. |
 | `--platform` | auto-detect | `github` or `gitlab`. Auto-detected from remote URL. |
 | `--ci-timeout` | `1800` | Seconds to wait for checks before bailing. |
 | `--ci-poll-interval` | `30` | Seconds between status polls. Backs off to 60s after 10 polls. |
-| `--title` | auto-generated | Override generated title. |
-| `--body` | auto-generated | Override generated body. Starting point for `--show-me` apply; the flag still appends or replaces the PR visual section. |
-| `--show-me` | `false` | Append (or replace) a PR visual section on the PR description so a human reviewer can read what the change does before the diff. Not implied by `--auto`. |
+| `--title` | auto-generated | Override generated title. Ignored in cascade graph mode (§12.2). |
+| `--body` | auto-generated | Override generated body. Starting point for `--show-me` apply; the flag still appends or replaces the PR visual section. Ignored in cascade graph mode (§12.2). |
+| `--show-me` | `false` | Append (or replace) a PR visual section on the PR description so a human reviewer can read what the change does before the diff. Not implied by `--auto`. Composes onto a cascade ship when passed. |
+| `--cascade` | `false` | Opt-in. `plan` then `advance` (§12): ship one unblocked GitHub work item as a PR against the trunk. Not implied by `--auto`. A phrase like "cascade these tickets" sets it. |
 
-Boolean flags accept a bare form (`--review`) or an explicit value
+Boolean flags accept a bare form (`--review`, `--cascade`) or an explicit value
 (`--review=true` / `--review=false`). The bare form means `true`. An explicit
 `--review=false` is only useful to cancel a flag that `--auto` would otherwise
 turn on (e.g. `--auto --merge=false` → do everything but stop before merge).
+`--cascade=false` cancels a cascade phrase. `--auto` does not turn `--cascade`
+on, so the explicit false is rarely needed.
 
 ### Invocation flow (decision tree)
 
 ```
 pr-autopilot
+   │
+   ├─ --cascade (or a cascade phrase)
+   │                    ► plan then advance (§12)
+   │                      each ship = one of the branches below
+   │                      host base = trunk. --auto does not take this branch
    │
    ├─ --auto ───────────► full hands-off: PR → review → resolve
    │                        (comments + conflicts + CI) → wait ALL CI → merge
@@ -232,6 +252,9 @@ Invocation examples:
 - `pr-autopilot --show-me` → create the PR with a PR visual section, then stop
 - `pr-autopilot --show-me --resolve` → section on create, regenerate after an Author push that changed the diff
 - `pr-autopilot --auto --show-me` → full hands-off **and** the section (still not implied by `--auto` alone)
+- `pr-autopilot --cascade` → plan/advance; one unblocked GitHub work item ships as a PR against the trunk (`--auto` does not imply this)
+- `pr-autopilot --cascade --review --show-me --draft` → those flags compose onto that PR; still no merge
+- "cascade these tickets" → same as `--cascade`
 
 If no flags are present and the invocation is interactive, the orchestrator MAY
 prompt once: "Which mode? [1] PR only (default)  [2] PR + merge  [3] PR + review
@@ -242,6 +265,10 @@ create the PR and stop.
 ---
 
 ## 2. Architecture
+
+When `--cascade` is on, this diagram is one **ship**. `plan` / `advance`
+(§12) wrap it. Host base is the trunk. The current feature branch is not
+the parent. When `--cascade` is off, start here on the current branch.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -297,6 +324,10 @@ someone else's problem. Phase 2 is skipped entirely when `--resolve` runs withou
 
 ## 3. Phase 1 — Preflight + PR Creation
 
+If `--cascade` is on **this invocation**, go to **§12** first. Do not
+push the current branch as the PR head. Each **ship** re-enters this
+phase on the work-item branch with `BASE` = trunk.
+
 ### 3.1 Preflight (fail fast)
 
 Run these checks before anything else. Abort with a clear message on failure.
@@ -307,6 +338,9 @@ git rev-parse --is-inside-work-tree
 
 # Current branch
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
+# Skip this abort in --cascade graph mode until ship has cut a work-item
+# branch from trunk (§12.2). Graph mode never uses the current branch as
+# the PR head. After that cut, the abort still applies if BRANCH is main/master.
 [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ] && echo "ABORT: on protected branch" && exit 1
 
 # Working tree clean?
@@ -350,7 +384,8 @@ Capture `PR_NUMBER` and `PR_URL`. Then:
   `glab mr view <iid> --output json` → `.description`.
 - Write or update `.pr-autopilot/<PR_NUMBER>/state.json`. Set
   `show_me` to whether `--show-me` is on **this invocation** (do not inherit
-  `true` from a previous run). Set `head_sha` to HEAD. Preserve an existing
+  `true` from a previous run). Set `cascade` the same way from `--cascade`
+  — do not inherit `true`. Set `head_sha` to HEAD. Preserve an existing
   `iteration` if present; do not reset it to 0.
 - Then jump to **§3.6** with that PR number. Do not generate a new title/body.
 
@@ -383,6 +418,10 @@ If `--title`/`--body` not provided:
 If `--body` was provided, that string is the starting body (no Summary/Changes
 generation). `--title` only overrides the title; the body still follows this
 section (generated or `--body`).
+
+When this create is a cascade graph-mode **ship** (§12.2), ignore `--title`
+and `--body`. Generate both from the work item. The body must include
+`Closes #<work-item>` (GitHub) and must not close the parent spec.
 
 If `--show-me` is on, run **§3.4** on this body **before** create, so the PR
 opens with the PR visual section already applied.
@@ -506,7 +545,9 @@ Capture and persist:
 - `PR_NUMBER`
 - `PR_URL`
 - Initialize `.pr-autopilot/<PR_NUMBER>/state.json` with
-  `{iteration: 0, status: "created", show_me: <bool>, head_sha: "<HEAD>"}`
+  `{iteration: 0, status: "created", show_me: <bool>, cascade: <bool>, head_sha: "<HEAD>"}`
+  `show_me` and `cascade` are whether those flags are on **this invocation**
+  (do not inherit `true` from a previous run).
 
 ### 3.6 Post-creation routing
 
@@ -1782,8 +1823,16 @@ Merge only when `--merge`/`--auto` is set; always skip if `--draft`. Update `sta
 
 | Situation | Action |
 |-----------|--------|
-| PR already exists | Reuse PR number, skip creation. If `--show-me`, still run §3.4 on the live description |
+| PR already exists | Reuse PR number, skip creation. If `--show-me`, still run §3.4 on the live description. Cascade reuse of an open work-item PR is later ticket #20 |
 | `--show-me` and `show-me` skill missing | Use the condensed fallback in §3.4. Never skip silently. Never emit HTML |
+| `--auto` without `--cascade` / no cascade phrase | Not cascade. One PR from the current branch. No forest |
+| `--cascade` (or "cascade these tickets") | `plan` then `advance` (§12). Do not start Phase 1 on the current branch |
+| `--cascade` and `cascade-flow` missing | Alert + `npx skills add FelipeOFF/skills --skill=cascade-flow`. Condensed fallback in §12.3. PR still opens |
+| Cascade graph mode `--title` / `--body` | Not stamped onto the work-item PR. Title and body come from the work item |
+| `ready-for-human`, id not named | Skip. Do not implement. Do not open a PR |
+| Spec/epic in this ticket's happy path | Not a PR. Children vs one-PR ask is later ticket #19 |
+| `--cascade` while on `main`/`master` | Allowed in graph mode: cut a new branch from trunk. Do not abort preflight on the current branch |
+| Several work items / stacking on a parent head | Later ticket #18. Do not invent a line |
 | `--show-me` Author round with no push or unchanged diff | Leave the description alone |
 | `--resolve` / `--auto` without `--show-me` | Never write a PR visual section |
 | Working tree dirty | Ask user to commit; do not auto-stash |
@@ -1822,7 +1871,7 @@ skip a BLOCKER, and **never** silently change a business rule — `groom-me` fir
 Layout under `.pr-autopilot/<PR_NUMBER>/`:
 
 ```
-state.json                       # {iteration, status, pr_url, platform, started_at, show_me, head_sha}
+state.json                       # {iteration, status, pr_url, platform, started_at, show_me, cascade, head_sha}
 pr-visual.md                     # last applied PR visual section (absent when --show-me is off)
 iter-1/review-report.md          # merged findings from code + test tracks
                                  # (absent when --resolve runs without --review)
@@ -1839,6 +1888,14 @@ iter-2/pr-feedback.md
 iter-2/response-summary.md
 ci/last-poll.json
 merge.json                       # post-merge metadata
+```
+
+Under `--cascade`, also `.pr-autopilot/cascade/` (this invocation; do not
+inherit `cascade: true`):
+
+```
+plan.md                          # typed forest plan (front-matter + items)
+state.json                       # {cascade, mode, trunk, source, items, last_result}
 ```
 
 `state.json.status` transitions:
@@ -1893,6 +1950,19 @@ pr-autopilot --show-me --resolve
 
 # Full hands-off plus the briefing
 pr-autopilot --auto --show-me
+
+# Cascade (opt-in; --auto does not imply this): one unblocked GitHub work
+# item as a PR against the trunk. Current feature branch is not the parent.
+pr-autopilot --cascade
+
+# Same flag via a phrase
+# cascade these tickets
+
+# Compose review / visual / draft onto that PR (still no merge)
+pr-autopilot --cascade --review --show-me --draft
+
+# Trunk is develop
+pr-autopilot --cascade --base=develop
 ```
 
 ---
@@ -1919,7 +1989,252 @@ Keep terminal output terse. Per phase, emit one line:
 ```
 
 The `[mode]` line reflects the flags in play — e.g. `PR only (no flags)`,
-`--merge`, `--review`, `--resolve`, or `--auto (full hands-off)`. Phases that don't
-run for the chosen mode are simply absent from the output.
+`--merge`, `--review`, `--resolve`, `--cascade`, or `--auto (full hands-off)`.
+Phases that don't run for the chosen mode are simply absent from the output.
+
+When `--cascade` is on, print the short tree (§12.4) as well — not the
+cascade-flow `--full` dashboard. Example:
+
+```
+[mode] --cascade
+[cascade] graph  trunk=main  source=github
+[cascade] cascade-flow skill missing — npx skills add FelipeOFF/skills --skill=cascade-flow
+main
+└→ #17 [opened] PR #42  Closes #17
+[1/6] PR #42 created → https://github.com/acme/api/pull/42
+```
 
 On any halt, print: phase, reason, the artifact path the user should inspect, and 1–2 suggested next actions. On an `escalated` halt (business-rule conflict / unfixable CI), name exactly what needs a human decision.
+
+---
+
+## 12. Cascade (`--cascade`)
+
+`--cascade` wraps the existing pipeline. It does not replace phases 1–6
+and it does not turn `--merge` on. `--auto` does not turn `--cascade` on.
+Record `cascade` in run state from **this invocation** only — do not inherit
+`true` from a previous run.
+
+When the flag is off, this section does not run. Start at Phase 1 on the
+current branch.
+
+When the flag is on, do **not** start Phase 1 on the current branch. Run
+`plan`, then loop `advance` until `done` (or a later-ticket halt/ask).
+Each **ship** is phases 1–6 on that work item, with host base = trunk.
+
+A **work item** (GitHub, this ticket): an issue labelled `ready-for-agent`
+that has a parent or a task type. A spec/epic is the container — it does
+not get a PR. `ready-for-human` is skipped unless that ID was named.
+
+**Trunk.** `--base` if passed, else the repo default branch:
+
+```bash
+gh repo view --json defaultBranchRef -q .defaultBranchRef.name
+```
+
+**Graph mode** ignores the current feature branch. IDs or a phrase like
+"these tickets" select it.
+
+### 12.1 `plan(invocation, repo, current_pr)`
+
+`plan` is the seam. Done means the examples in §12.5 hold.
+
+```
+on(plan)
+  cascade off → not this feature
+  IDs or "these tickets" → mode=graph, items=forest(source, ids)
+    this ticket: origin GitHub, one unblocked ready-for-agent work item
+    several items / child stacking: later ticket #18
+    GitLab / beads / Jira / two sources / spec-only ask: later ticket #19
+  else if current PR base ≠ trunk → mode=existing-chain   # later ticket #21
+  else if zero or two+ sources without ids → ask (halt if no TTY / --auto)
+                                                    # later ticket #19
+  else → ask which work items                       # later ticket #19
+```
+
+**Parse the flag** like `--review`: `--cascade` or `--cascade=true` is on;
+`--cascade=false` cancels a phrase. A **clear cascade phrase** also sets
+it (case-insensitive): "cascade these tickets", "cascade those issues",
+"cascade the work items", "cascade this", "run a cascade". `--auto` is
+not a cascade phrase. cascade-flow `--full` / a panorama is not a
+cascade phrase.
+
+**GitHub items** (origin is GitHub; a global Jira MCP is not a source):
+
+```bash
+# Named id
+gh issue view <N> --json number,title,body,labels,state,url
+
+# Labels, parent, type
+gh api graphql -f query='
+  query($owner:String!, $repo:String!, $n:Int!) {
+    repository(owner:$owner, name:$repo) {
+      issue(number:$n) {
+        number title state
+        issueType { name }
+        parent { number title }
+        labels(first:20) { nodes { name } }
+      }
+    }
+  }'
+```
+
+- `ready-for-agent` + (parent or task type) → work item.
+- `ready-for-human` and the id was **not** named → skip (not in `items`,
+  or marked skip for `advance`).
+- Spec/epic (container, no task type, or the parent of the work items) →
+  not a PR in this ticket's happy path.
+- **Unblocked:** `## Blocked by` is none / empty / all closed, and no
+  open native blocking issue. One unblocked work item is this ticket.
+- "these open tickets" / "these tickets": ready-for-agent work items,
+  optionally scoped to a parent spec named in the prompt. Still skip
+  unnamed `ready-for-human`.
+
+Write `.pr-autopilot/cascade/plan.md` (typed artifact, this invocation):
+
+```markdown
+---
+cascade: true
+mode: graph
+trunk: <branch>
+source: github
+---
+
+# Forest plan
+
+## Items
+- #<id> ready-for-agent unblocked parent=#<spec|none> → ship (base=trunk)
+```
+
+Also write `.pr-autopilot/cascade/state.json`:
+`{cascade: true, mode, trunk, source, items, last_result}`.
+`cascade` is from this invocation only.
+
+### 12.2 `advance(plan, last_result)`
+
+`advance` is the seam. Done means the examples in §12.5 hold.
+
+```
+on(advance)
+  next ready item has open PR → reuse          # later ticket #20
+  next ready item is ready-for-human and not named → skip
+  last_result is halt → halt the forest        # later ticket #20
+  requested stages of current unfinished → do not start the next
+                                           # later ticket #20
+  no items left → done
+  else → ship: existing pipeline, host base = parent head or trunk
+    this ticket: host base = trunk
+    parent head / stacking: later ticket #18
+```
+
+After `skip`, call `advance` again. After a finished `ship`,
+`last_result=ship` and call `advance` again (one item → `done`).
+
+**`skip`:** print the work item as skipped on the cascade tree. Do not
+open a PR. Do not implement it.
+
+**`ship`** (this ticket — one unblocked GitHub work item):
+
+1. Load `cascade-flow` (§12.3). Missing: alert + condensed fallback;
+   continue.
+2. Fetch trunk. Cut a **new** branch from `origin/<trunk>`, in a new
+   worktree. One worktree at a time. Typical path:
+   `../<repo>-wt/<branch>`. Branch name follows the repo's convention
+   if documented, else `feat/<id>/<slug>`.
+   **The current feature branch is not the parent and not the base.**
+   Do not `git merge` it in. Do not open the PR from it.
+   Being on `main`/`master` here is not an abort — graph mode does not
+   use the current branch as the PR head.
+3. In that worktree, implement the work item (issue body + acceptance).
+   Every line of code through `ponytail` (§0.2). Commit. Then run
+   **phases 1–6** with:
+   - `BASE` = trunk
+   - `BRANCH` = the new branch
+   - `--title` / `--body` **not** stamped (ignore them in graph mode)
+   - Title from the work item (commit convention)
+   - Body from the work item (Summary / Changes / Test plan), humanized
+     (§0.1), plus `Closes #<id>` (GitHub). Do **not** close the parent
+     spec (`Closes #<spec>` stays off)
+   - Flags already on this run compose onto that PR: `--review`,
+     `--resolve`, `--merge`, `--auto`, `--show-me`, `--unslop`,
+     `--draft`, `--merge-strategy`. `--cascade` does not turn merge on.
+     `--draft` still forces no merge.
+4. Print the cascade tree (§12.4).
+
+Phase 1 on the work-item branch is the existing create path. `--show-me`
+apply, `--draft`, review, resolve, CI, merge — unchanged, host base =
+trunk.
+
+### 12.3 `cascade-flow`
+
+Required sub-skill for stacking discipline. Load it (`Skill` tool,
+`skill: "cascade-flow"`) once per cascade run. cascade-flow `--full`
+is a panorama: do not print it; do not treat it as `--cascade`.
+
+**Missing skill.** Alert and continue. Do not abort. Do not fake the
+full skill. The PR still opens.
+
+```
+[cascade] cascade-flow skill missing — stacking rules below. Install with:
+npx skills add FelipeOFF/skills --skill=cascade-flow
+```
+
+**Condensed fallback** (the part this pipeline depends on):
+
+- Stack on the parent head, not the trunk, when a child has a blocker
+- One unit per PR
+- Merge bottom-up (root into the trunk first)
+- `git merge` the parent in (no history rewrite)
+- Never force-push the chain (never the trunk; no blind `-f`)
+
+Child stacking and bottom-up merge are later tickets (#18, #22). This
+ticket still prints the fallback and still ships the one root against
+the trunk.
+
+### 12.4 Cascade tree
+
+When `--cascade` is on, print one short tree. Not cascade-flow `--full`.
+
+```
+cascade graph  trunk=main  source=github
+main
+└→ #17 [opened] PR #42  Closes #17
+```
+
+A skipped ready-for-human (not named):
+
+```
+cascade graph  trunk=main  source=github
+main
+└→ #17 [opened] PR #42  Closes #17
+#18 ready-for-human skipped (not named)
+```
+
+Statuses this ticket uses: `opened`, `skipped`. `failed` / `pending` /
+reuse: later ticket #20.
+
+### 12.5 Examples (completion criterion for plan / advance)
+
+1. `pr-autopilot --auto` with no cascade phrase, current branch against
+   `main` → plan: not this feature. One PR to `main`. No forest.
+   `advance` is not called.
+2. Origin GitHub, `--cascade` (or "cascade these tickets"), one unblocked
+   `ready-for-agent` work item `#17` with parent spec `#16`, current
+   branch `feat/leftover` → plan: `mode=graph`, `source=github`,
+   `items=[#17]`, trunk = `--base` or repo default. `advance`: ship.
+   New branch cut from trunk; `feat/leftover` is not the parent. Phases
+   1–6 with host base = trunk. PR body has `Closes #17` and does not
+   close `#16`. Short tree printed.
+3. Same as 2 with `--title` / `--body` set → those flags are not stamped
+   on the work-item PR. Title and body still come from `#17`.
+4. Same as 2 with `--review` / `--show-me` / `--unslop` / `--draft`
+   passed → those flags compose onto that PR. `--cascade` does not turn
+   `--merge` on.
+5. `#17` ready-for-agent unblocked, `#18` ready-for-human and not named
+   → `#18` skipped; `#17` shipped.
+6. `--cascade` on, `cascade-flow` missing → alert +
+   `npx skills add FelipeOFF/skills --skill=cascade-flow`; condensed
+   fallback in §12.3; the PR still opens.
+
+Do not test: forest stacking (#18), reuse/halt (#20), existing-chain
+(#21), merge-bottom-up (#22), GitLab/beads/Jira/spec-only ask (#19).

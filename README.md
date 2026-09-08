@@ -10,7 +10,7 @@ A [Claude Code skill](https://docs.claude.com/en/docs/claude-code/skills) that o
 
 **Create → Review → Triage every comment → Respond → Re-review → Resolve conflicts & fix CI → Wait for CI → Merge.** Hands-off.
 
-**Opt-in by default.** Every stage is off unless you ask for it. Bare `pr-autopilot` just opens the PR and stops. You switch on each stage with a flag (`--review`, `--resolve`, `--merge`) or turn them all on at once with `--auto`.
+**Opt-in by default.** Every stage is off unless you ask for it. Bare `pr-autopilot` just opens the PR and stops. You switch on each stage with a flag (`--review`, `--resolve`, `--merge`) or turn them all on at once with `--auto`. `--cascade` is a separate opt-in: it ships a GitHub work item as a PR against the trunk. `--auto` does not turn it on.
 
 ---
 
@@ -49,6 +49,7 @@ Stages ②–⑥ are opt-in. With no flags the run ends after ①.
 - **Opt-in stages** — every flag defaults to `false`. Bare `pr-autopilot` opens the PR and stops; you turn on review, resolve, and merge as you need them.
 - **Auto title + body** from commits and diff, following Conventional Commits + Jira.
 - **`--show-me` reviewer briefing** — opt-in. Appends a `## What this PR does` section to the PR description (mermaid / file tree / call tree / markdown diff, never HTML) so a human reviewer can read the change, the trade-off, and the alternative that did not ship before the diff. `--auto` does not turn this on. A second run replaces the section instead of duplicating it. With `--resolve`, the section regenerates after an Author push that actually changed the diff.
+- **`--cascade` work items against the trunk** — opt-in. Implements one unblocked GitHub work item and opens one PR against the trunk (`--base`, or the repo default). `--auto` does not turn this on. A phrase like "cascade these tickets" does. The current feature branch is not the parent. `ready-for-human` is skipped unless that ID was named. `--title` / `--body` are not stamped on the work-item PR.
 - **Multi-agent review loop** with structured findings: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Writes like a person, codes like a lazy senior** — every word posted to the PR goes through [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) and every line of code through [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). No `✅ FIXED` stamps, no `[BLOCKER]` brackets, no emoji openers: comments read like a teammate wrote them, and the machine state rides in an invisible HTML marker. Both skills are also restated inside the skill, so a bare harness without them behaves the same.
 - **Reviews for over-engineering, not just bugs** — the Reviewer carries the ponytail lens: an abstraction with one caller, a dependency added for three lines, a helper reimplemented when the repo already has one. "Delete this" is a valid finding.
@@ -134,9 +135,9 @@ cp SKILL.md .claude/skills/pr-autopilot/
 ```
 
 When you start typing `/pr-autopilot` in Claude Code, the available flags
-(`--auto`, `--review`, `--resolve`, `--merge`, `--draft`, …) appear inline
+(`--auto`, `--review`, `--resolve`, `--merge`, `--show-me`, `--cascade`, `--draft`, …) appear inline
 thanks to the `argument-hint` declared in the skill's front-matter — same
-pattern GSD uses.
+pattern GSD uses. `--auto` does not imply `--cascade`.
 
 ## Development workflow
 
@@ -168,13 +169,15 @@ Everything is opt-in — compose the flags you want (each defaults to `false`):
 | **PR + review** | `/pr-autopilot --review` | Creates PR, posts **inline** review comments, stops |
 | **Resolve what's already there** | `/pr-autopilot --resolve` | Skips the AI review. The Author triages every comment already on the PR — human and bot — fixes what's actionable, resolves conflicts, fixes CI, stops before merge |
 | **Review + resolve** | `/pr-autopilot --review --resolve` | Creates PR, posts an inline review, then the Author resolves that review *plus* everything else on the PR, loops, stops before merge (add `--merge` to merge) |
-| **Auto (full hands-off)** | `/pr-autopilot --auto` | Everything on, never prompts. Resolves conflicts and fixes CI. Waits for **all** CI checks. Merges only when everything is green. Halts or escalates on any guardrail. |
+| **Auto (full hands-off)** | `/pr-autopilot --auto` | Everything on, never prompts. Resolves conflicts and fixes CI. Waits for **all** CI checks. Merges only when everything is green. Halts or escalates on any guardrail. Does **not** turn on `--cascade`. |
+| **Cascade** | `/pr-autopilot --cascade` | One unblocked GitHub work item as a PR against the trunk. Current feature branch is not the parent. `--auto` does not turn this on. |
 
 Notes:
 
 - `--resolve` is independent of `--review`. Alone, it works the feedback the PR already has without adding a review of its own — that's the mode for a PR a human already reviewed.
 - `--merge` is what enables the merge; without it (or `--auto`) the run always stops before merging.
 - `--auto` is shorthand for `--review --resolve --merge` plus "never ask me anything" — but it never relaxes a guardrail: failing tests, a business-rule conflict, an open BLOCKER, or a red check all halt or escalate.
+- `--auto` does **not** imply `--cascade`. A stacked forest is a separate opt-in. A phrase like "cascade these tickets" turns `--cascade` on; `--auto` does not.
 - No prompts means no consent. Anything needing your explicit yes — a business-rule change, or a comment claiming CI is red for reasons outside your PR — is recorded as escalated in `--auto`, never done silently.
 
 ## Usage
@@ -215,6 +218,15 @@ From any branch with commits to ship:
 
 # Briefing on create; regenerate after Author fixes that change the diff
 /pr-autopilot --show-me --resolve
+
+# One unblocked GitHub work item as a PR against the trunk
+# (--auto does not imply this)
+/pr-autopilot --cascade
+
+# Same flag via a phrase: cascade these tickets
+
+# Compose review / visual / draft onto that PR (still no merge)
+/pr-autopilot --cascade --review --show-me --draft
 ```
 
 ### Flags
@@ -223,15 +235,16 @@ Every boolean flag defaults to `false` — pass it (bare, or `=true`) to turn th
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--auto` | `false` | Full hands-off: turns on `--review`, `--resolve`, `--merge`, never prompts, resolves conflicts + fixes CI. |
+| `--auto` | `false` | Full hands-off: turns on `--review`, `--resolve`, `--merge`, never prompts, resolves conflicts + fixes CI. Does **not** turn on `--show-me` or `--cascade`. |
 | `--review` | `false` | Run the Reviewer subagent (inline comments) |
 | `--resolve` | `false` | Run the Author subagent — triages every comment already on the PR (human and bot), fixes what's actionable, resolves conflicts, fixes CI. Does **not** imply `--review`. |
-| `--merge` | `false` | Enable auto-merge on green CI + `MERGEABLE`. Without it the run stops before merge. |
+| `--merge` | `false` | Enable auto-merge on green CI + `MERGEABLE`. Without it the run stops before merge. `--cascade` does not turn this on. |
 | `--max-iterations` | `2` | Max review→respond (and CI-fix) cycles |
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
-| `--base` | auto | Target branch |
+| `--base` | auto | Target branch. Under `--cascade`, this is the trunk the root PR targets. |
 | `--draft` | `false` | Open as draft (forces no merge) |
 | `--show-me` | `false` | Append (or replace) a reviewer briefing on the PR description. Not implied by `--auto`. |
+| `--cascade` | `false` | Ship one unblocked GitHub work item as a PR against the trunk. Not implied by `--auto`. A phrase like "cascade these tickets" sets it. |
 | `--ci-timeout` | `1800` | Seconds before bailing on CI |
 | `--ci-poll-interval` | `30` | Seconds between polls |
 
