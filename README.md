@@ -10,7 +10,7 @@ A [Claude Code skill](https://docs.claude.com/en/docs/claude-code/skills) that o
 
 **Create → Review → Triage every comment → Respond → Re-review → Resolve conflicts & fix CI → Wait for CI → Merge.** Hands-off.
 
-**Opt-in by default.** Every stage is off unless you ask for it. Bare `pr-autopilot` just opens the PR and stops. You switch on each stage with a flag (`--review`, `--resolve`, `--merge`) or turn them all on at once with `--auto`. `--cascade` is a separate opt-in: it ships a GitHub work item as a PR against the trunk. `--auto` does not turn it on.
+**Opt-in by default.** Every stage is off unless you ask for it. Bare `pr-autopilot` just opens the PR and stops. You switch on each stage with a flag (`--review`, `--resolve`, `--merge`) or turn them all on at once with `--auto`. `--cascade` is a separate opt-in: it picks the tracker source from this repo or IDs in the prompt and ships a work item as a PR against the trunk. `--auto` does not turn it on.
 
 ---
 
@@ -50,7 +50,7 @@ Stages ②–⑥ are opt-in. With no flags the run ends after ①.
 - **Auto title + body** from commits and diff, following Conventional Commits + Jira.
 - **`--show-me` reviewer briefing** — opt-in. Appends a `## What this PR does` section to the PR description (mermaid / file tree / call tree / markdown diff, never HTML) so a human reviewer can read the change, the trade-off, and the alternative that did not ship before the diff. Combined with `--review`, every Reviewer finding also gets one **comment view** of the same four shapes, on the same line as the finding; the severity marker stays last. Combined with `--resolve`, every Author reply on a thread that still has no reply, and a posted CI triage comment, also get exactly one comment view; already-handled threads and NOISE stay unanswered. `--auto` does not turn this on. A second run replaces the section instead of duplicating it. With `--resolve`, the section regenerates after an Author push that actually changed the diff. The Author does not write the PR visual section.
 - **`--show-me-comments` operator briefing** — opt-in. Prints markdown in the harness conversation for every comment already on the PR: `path:line` when the comment is inline, the quoted remark, and one **comment view** (mermaid / file tree / call tree / markdown diff, never HTML). Top-level comments skip the path line. Not posted to the PR. Not a local HTML file. `--auto` does not turn this on. Without `--resolve`, the run briefs and stops (after the review is posted, if `--review` also ran). With `--resolve`, it briefs after inventory and before the Author touches code. `--auto` or no TTY writes `.pr-autopilot/<PR>/operator-briefing.md` and continues. If `show-me` cannot load: the same alert + `npx skills add FelipeOFF/skills --skill=show-me` as `--show-me`; no fake briefing.
-- **`--cascade` work items against the trunk** — opt-in. Implements one unblocked GitHub work item and opens one PR against the trunk (`--base`, or the repo default). `--auto` does not turn this on. A phrase like "cascade these tickets" does. The current feature branch is not the parent. `ready-for-human` is skipped unless that ID was named. `--title` / `--body` are not stamped on the work-item PR.
+- **`--cascade` work items against the trunk** — opt-in. Picks the tracker source from this repo or the IDs in the prompt (GitHub if origin is GitHub, GitLab if GitLab, beads if `.beads/` exists, Jira only with a repo project or `PROJ-123` in the prompt). A globally installed MCP is not a source. `#9` / `PROJ-12` / a `bd` id pick the source without asking. Two sources, zero sources, or a prompt that is only a spec ID: ask once; under `--auto`, halt. Cairn tickets are beads. No tracker config file. Implements one unblocked work item and opens one PR against the trunk (`--base`, or the repo default). `--auto` does not turn this on. A phrase like "cascade these tickets" does. The current feature branch is not the parent. `ready-for-human` is skipped unless that ID was named. `--title` / `--body` are not stamped on the work-item PR.
 - **Multi-agent review loop** with structured findings: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Writes like a person, codes like a lazy senior** — every word posted to the PR goes through [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) and every line of code through [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). No `✅ FIXED` stamps, no `[BLOCKER]` brackets, no emoji openers: comments read like a teammate wrote them, and the machine state rides in an invisible HTML marker. Both skills are also restated inside the skill, so a bare harness without them behaves the same.
 - **`--unslop` second prose pass** — opt-in. After humanizer, posted natural-language (generated title and body, Reviewer findings, Author replies, a posted CI triage comment) goes through [`unslop`](https://github.com/cursor/plugins/tree/main/pstack/skills/unslop) in the invoker's voice: the GitHub or GitLab account of this run, sampled from comments that account already left on this repo. No sample → first person, no voice file. `--auto` does not turn this on. If the skill is missing, the run alerts with `npx skills add https://github.com/cursor/plugins --skill=unslop` and continues humanizer-only — it never fakes the pass.
@@ -172,7 +172,7 @@ Everything is opt-in — compose the flags you want (each defaults to `false`):
 | **Resolve what's already there** | `/pr-autopilot --resolve` | Skips the AI review. The Author triages every comment already on the PR — human and bot — fixes what's actionable, resolves conflicts, fixes CI, stops before merge |
 | **Review + resolve** | `/pr-autopilot --review --resolve` | Creates PR, posts an inline review, then the Author **always** runs — even if that review is APPROVED — on that review *plus* everything else on the PR, loops, stops before merge (add `--merge` to merge) |
 | **Auto (full hands-off)** | `/pr-autopilot --auto` | Everything on, never prompts. Resolves conflicts and fixes CI. Waits for **all** CI checks. Merges only when everything is green. Halts or escalates on any guardrail. Does **not** turn on `--cascade`. |
-| **Cascade** | `/pr-autopilot --cascade` | One unblocked GitHub work item as a PR against the trunk. Current feature branch is not the parent. `--auto` does not turn this on. |
+| **Cascade** | `/pr-autopilot --cascade` | Pick tracker source from this repo or IDs, then one unblocked work item as a PR against the trunk. Current feature branch is not the parent. `--auto` does not turn this on. |
 
 Notes:
 
@@ -250,11 +250,15 @@ From any branch with commits to ship:
 # Full hands-off plus unslop on every posted prose surface auto already writes
 /pr-autopilot --auto --unslop
 
-# One unblocked GitHub work item as a PR against the trunk
-# (--auto does not imply this)
+# Pick source from this repo or IDs, then one unblocked work item
+# as a PR against the trunk (--auto does not imply this)
 /pr-autopilot --cascade
 
 # Same flag via a phrase: cascade these tickets
+
+# IDs pick the source without asking
+/pr-autopilot --cascade #9
+/pr-autopilot --cascade PROJ-12
 
 # Compose review / visual / draft onto that PR (still no merge)
 /pr-autopilot --cascade --review --show-me --draft
@@ -277,7 +281,7 @@ Every boolean flag defaults to `false` — pass it (bare, or `=true`) to turn th
 | `--show-me` | `false` | Append (or replace) a reviewer briefing on the PR description. Combined with `--review`, also puts one comment view on each Reviewer finding. Combined with `--resolve`, also puts one comment view on each unreplied Author reply and on a posted CI triage comment. Not implied by `--auto`. |
 | `--show-me-comments` | `false` | Print an operator briefing of comments already on the PR (quoted remark + one comment view; `path:line` when inline). Not posted. Not implied by `--auto`. |
 | `--unslop` | `false` | After humanizer, run posted prose through unslop in the invoker's voice. Not implied by `--auto`. |
-| `--cascade` | `false` | Ship one unblocked GitHub work item as a PR against the trunk. Not implied by `--auto`. A phrase like "cascade these tickets" sets it. |
+| `--cascade` | `false` | Pick tracker source from this repo or IDs, then ship one unblocked work item as a PR against the trunk. Not implied by `--auto`. A phrase like "cascade these tickets" sets it. |
 | `--ci-timeout` | `1800` | Seconds before bailing on CI |
 | `--ci-poll-interval` | `30` | Seconds between polls |
 
