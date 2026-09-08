@@ -48,10 +48,12 @@ Os estágios ②–⑥ são opt-in. Sem nenhuma flag, a execução termina depoi
 
 - **Estágios opt-in** — toda flag tem default `false`. O `pr-autopilot` puro abre o PR e para; você liga review, resolve e merge conforme precisar.
 - **Título e descrição automáticos** baseados em commits e diff, seguindo Conventional Commits + Jira.
-- **`--show-me` briefing para o revisor** — opt-in. Anexa uma seção `## What this PR does` na descrição do PR (mermaid / file tree / call tree / diff em markdown, nunca HTML) para o revisor humano ler o que a mudança faz, o trade-off e a alternativa que não entrou, antes do diff. `--auto` não liga isso. Uma segunda execução troca a seção em vez de duplicar. Com `--resolve`, a seção regenera depois de um push do Author que de fato mudou o diff.
+- **`--show-me` briefing para o revisor** — opt-in. Anexa uma seção `## What this PR does` na descrição do PR (mermaid / file tree / call tree / diff em markdown, nunca HTML) para o revisor humano ler o que a mudança faz, o trade-off e a alternativa que não entrou, antes do diff. Combinado com `--review`, cada finding do Reviewer também ganha um **comment view** nas mesmas quatro formas, na mesma linha do achado; o marcador de severidade continua por último. Combinado com `--resolve`, cada resposta do Author numa thread que ainda não tem resposta, e um comentário de triagem de CI postado, também ganham exatamente um comment view; threads já tratadas e NOISE ficam sem resposta. `--auto` não liga isso. Uma segunda execução troca a seção em vez de duplicar. Com `--resolve`, a seção regenera depois de um push do Author que de fato mudou o diff. O Author não escreve a seção visual do PR.
+- **`--show-me-comments` operator briefing** — opt-in. Imprime markdown na conversa do harness para cada comentário que já existe no PR: `path:line` quando o comentário é inline, a observação citada, e um **comment view** (mermaid / file tree / call tree / diff em markdown, nunca HTML). Comentários de topo omitem a linha de path. Não é postado no PR. Não é um HTML local. `--auto` não liga isso. Sem `--resolve`, a execução faz o briefing e para (depois do review postado, se `--review` também rodou). Com `--resolve`, o briefing vem depois do inventário e antes do Author mexer no código. `--auto` ou sem TTY grava `.pr-autopilot/<PR>/operator-briefing.md` e continua. Se `show-me` não carregar: o mesmo alerta + `npx skills add FelipeOFF/skills --skill=show-me` do `--show-me`; sem briefing inventado.
 - **Loop de review multi-agente** com achados estruturados: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Author com poder de veto** — pode refutar um BLOCKER incorreto com evidência ao invés de aplicar cegamente.
 - **Escreve como gente, codifica como sênior preguiçoso** — cada palavra postada no PR passa pela [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) e cada linha de código pela [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). Sem carimbo `✅ FIXED`, sem colchete `[BLOCKER]`, sem emoji de abertura: o comentário parece escrito por um colega, e o estado de máquina viaja num marcador HTML invisível. As duas skills também estão reescritas dentro da própria skill, então um harness sem elas se comporta igual.
+- **`--unslop` segundo passe de prosa** — opt-in. Depois do humanizer, a prosa postada (título e body gerados, achados do Reviewer, respostas do Author, um comentário de triagem de CI) passa pela [`unslop`](https://github.com/cursor/plugins/tree/main/pstack/skills/unslop) na voz de quem invocou: a conta GitHub ou GitLab desta execução, amostrada nos comentários que essa conta já deixou neste repo. Sem amostra → primeira pessoa, sem arquivo de voz. `--auto` não liga isso. Se a skill estiver ausente, a execução alerta com `npx skills add https://github.com/cursor/plugins --skill=unslop` e segue só com humanizer — nunca finge o passe.
 - **Revisa over-engineering, não só bug** — o Reviewer carrega a lente ponytail: abstração com um único caller, dependência adicionada por três linhas, helper reimplementado quando o repo já tem um. "Apaga isso" é um achado válido.
 - **Lê todo comentário do PR, não só os dele** — com `--resolve`, o Author puxa comentários inline, comentários de topo e vereditos de review de humanos *e* de bots (Copilot, CodeRabbit, Sonar), classifica cada um (crítica / pergunta / ruído / já tratado), infere a severidade e responde inline em cada um, em linguagem de gente, com o marcador invisível carregando o estado. As respostas que ele mesmo deixou são lidas como estado, então ele nunca entra em loop respondendo a si mesmo.
 - **Resolve o PR inteiro** — com `--resolve`/`--auto`, o Author também resolve **conflitos de merge** (fazendo merge da base no feature branch, sem force-push) e **corrige o CI falhando** (lê os logs, corrige o código, roda a verificação de novo, dá push).
@@ -134,7 +136,7 @@ cp SKILL.md .claude/skills/pr-autopilot/
 ```
 
 Ao começar a digitar `/pr-autopilot` no Claude Code, as flags disponíveis
-(`--auto`, `--review`, `--resolve`, `--merge`, `--draft`, …) aparecem
+(`--auto`, `--review`, `--resolve`, `--merge`, `--show-me`, `--show-me-comments`, `--unslop`, `--draft`, …) aparecem
 inline graças ao `argument-hint` declarado no front-matter da skill — mesmo
 padrão usado pelo GSD.
 
@@ -167,14 +169,15 @@ Tudo é opt-in — componha as flags que você quiser (cada uma tem default `fal
 | **PR + merge** | `/pr-autopilot --merge` | Cria o PR, espera o CI, dá merge. Sem review. |
 | **PR + review** | `/pr-autopilot --review` | Cria o PR, posta o review **inline**, para |
 | **Resolver o que já está lá** | `/pr-autopilot --resolve` | Pula o review da IA. O Author tria todo comentário que já existe no PR — humano e bot — corrige o que é acionável, resolve conflitos, corrige o CI, para antes do merge |
-| **Review + resolve** | `/pr-autopilot --review --resolve` | Cria o PR, posta o review inline, e o Author resolve esse review *mais* todo o resto do PR, loop, para antes do merge (adicione `--merge` para dar merge) |
+| **Review + resolve** | `/pr-autopilot --review --resolve` | Cria o PR, posta o review inline, e o Author **sempre** roda — mesmo se esse review for APPROVED — nesse review *mais* todo o resto do PR, loop, para antes do merge (adicione `--merge` para dar merge) |
 | **Auto (totalmente hands-off)** | `/pr-autopilot --auto` | Tudo ligado, nunca pergunta. Resolve conflitos e corrige o CI. Espera **todos** os checks de CI. Só faz merge quando tudo está verde. Aborta ou escala em qualquer guardrail. |
 
 Observações:
 
-- `--resolve` é independente de `--review`. Sozinha, trabalha o feedback que o PR já tem sem acrescentar um review próprio — é o modo para um PR que um humano já revisou.
+- `--resolve` é independente de `--review`. Sozinha, trabalha o feedback que o PR já tem sem acrescentar um review próprio — é o modo para um PR que um humano já revisou. Combinada com `--review`, o Author ainda roda depois de um veredito APPROVED (inventário, checagem de conflito, atribuição de CI). Um quiet pass ainda imprime `conflict: none` e `CI: green`.
 - `--merge` é o que habilita o merge; sem ele (ou `--auto`) a execução sempre para antes do merge.
 - `--auto` é abreviação para `--review --resolve --merge` mais "nunca me pergunte nada" — mas nunca relaxa um guardrail: testes falhando, um conflito em regra de negócio, um BLOCKER aberto ou um check vermelho abortam ou escalam.
+- `--auto` **não** liga `--show-me`, `--unslop` nem `--show-me-comments`. Essas continuam opt-in.
 - Não perguntar significa não ter consentimento. O que exige o seu sim explícito — mudar uma regra de negócio, ou comentar que o CI está vermelho por causa alheia ao PR — vira `escalated` no `--auto`, nunca é feito em silêncio.
 
 ## Uso
@@ -213,8 +216,37 @@ De qualquer branch com commits para enviar:
 # Briefing para o revisor na descrição (--auto não implica isso)
 /pr-autopilot --show-me
 
-# Briefing na criação; regenera depois de fixes do Author que mudam o diff
+# Briefing na descrição, mais um comment view em cada finding do Reviewer
+/pr-autopilot --show-me --review
+
+# Briefing na criação; um comment view em cada reply ainda sem resposta e
+# no comentário de triagem de CI postado; regenera a seção depois de
+# fixes do Author que mudam o diff
 /pr-autopilot --show-me --resolve
+
+# Operator briefing dos comentários que já existem no PR (--auto não implica isso)
+/pr-autopilot --show-me-comments
+
+# Review, depois briefing desses findings mais o que já estava no PR, e para
+/pr-autopilot --show-me-comments --review
+
+# Briefing depois do inventário, então o Author trata os findings
+/pr-autopilot --show-me-comments --resolve
+
+# Hands-off total: grava .pr-autopilot/<PR>/operator-briefing.md e continua
+/pr-autopilot --auto --show-me-comments
+
+# Segundo passe de prosa depois do humanizer (--auto não implica isso)
+/pr-autopilot --unslop
+
+# Unslop nos achados do Reviewer
+/pr-autopilot --unslop --review
+
+# Unslop nas respostas do Author
+/pr-autopilot --unslop --resolve
+
+# Hands-off total mais unslop em toda prosa postada que o auto já escreve
+/pr-autopilot --auto --unslop
 ```
 
 ### Flags
@@ -225,25 +257,27 @@ Toda flag booleana tem default `false` — passe-a (pura, ou `=true`) para ligar
 |------|--------|-----------|
 | `--auto` | `false` | Hands-off total: liga `--review`, `--resolve`, `--merge`, nunca pergunta, resolve conflitos + corrige CI. |
 | `--review` | `false` | Roda o subagente Reviewer (comentários inline) |
-| `--resolve` | `false` | Roda o subagente Author — tria todo comentário que já existe no PR (humano e bot), corrige o que é acionável, resolve conflitos, corrige CI. **Não** implica `--review`. |
+| `--resolve` | `false` | Roda o subagente Author — sempre, mesmo quando o Reviewer aprovou. Tria todo comentário que já existe no PR (humano e bot), corrige o que é acionável, resolve conflitos, corrige CI. **Não** implica `--review`. |
 | `--merge` | `false` | Habilita o auto-merge no CI verde + `MERGEABLE`. Sem ela a execução para antes do merge. |
 | `--max-iterations` | `2` | Máximo de ciclos review→resposta (e correção de CI) |
 | `--merge-strategy` | `squash` | `squash` \| `merge` \| `rebase` |
 | `--base` | auto | Branch alvo |
 | `--draft` | `false` | Abre como draft (força sem merge) |
-| `--show-me` | `false` | Anexa (ou troca) um briefing para o revisor na descrição do PR. `--auto` não liga. |
+| `--show-me` | `false` | Anexa (ou troca) um briefing para o revisor na descrição do PR. Combinado com `--review`, também coloca um comment view em cada finding do Reviewer. Combinado com `--resolve`, também coloca um comment view em cada reply do Author ainda sem resposta e num comentário de triagem de CI postado. `--auto` não liga. |
+| `--show-me-comments` | `false` | Imprime um operator briefing dos comentários que já existem no PR (observação citada + um comment view; `path:line` quando inline). Não é postado. `--auto` não liga. |
+| `--unslop` | `false` | Depois do humanizer, passa a prosa postada pelo unslop na voz de quem invocou. `--auto` não liga. |
 | `--ci-timeout` | `1800` | Segundos antes de desistir do CI |
 | `--ci-poll-interval` | `30` | Intervalo entre polls |
 
 ### Review inline e respostas inline
 
-O Reviewer **nunca** posta um comentário único agregado no PR. Cada achado vai como comentário inline no arquivo e linha exatos. Ele abre com as palavras que um revisor fala em voz alta — `Blocking:`, `Suggestion:`, `nit:` — e fecha com um marcador invisível que carrega a severidade para o pipeline:
+O Reviewer **nunca** posta um comentário único agregado no PR. Cada achado vai como comentário inline no arquivo e linha exatos. Ele abre com as palavras que um revisor fala em voz alta — `Blocking:`, `Suggestion:`, `nit:` — e fecha com um marcador invisível que carrega a severidade para o pipeline. Com `--show-me --review`, o mesmo comentário também carrega exatamente um **comment view** (mermaid / file tree / call tree / diff em markdown, nunca HTML) acima do marcador. Sem `--show-me`, os findings ficam só em prosa.
 
 ```html
 <!-- pr-autopilot:severity=blocker -->
 ```
 
-O Author responde em cada comentário inline em linguagem normal, e fecha a resposta com o marcador de ação:
+O Author responde em cada comentário inline em linguagem normal, e fecha a resposta com o marcador de ação. Com `--show-me --resolve`, cada reply numa thread que ainda não tem resposta, e um comentário de triagem de CI postado, também carregam exatamente um comment view acima do marcador. Sem `--show-me`, as replies ficam só em prosa. Uma thread que já tem marcador de ação (ou um reply antigo com carimbo de status) fica sem segunda resposta — nem reply novo, nem view nova. NOISE fica sem reply. O Author não escreve a seção visual do PR.
 
 ```html
 <!-- pr-autopilot:action=fixed sha=abc1234 -->   o código foi alterado
@@ -277,6 +311,7 @@ O orquestrador nunca deixa os agentes conversarem diretamente. Eles se comunicam
 
 - `review-report.md` — produzido pelo Reviewer. Contém `verdict`, `blocker_count`, lista de achados. Ausente quando `--resolve` roda sem `--review`.
 - `pr-feedback.md` — produzido pelo Author antes de escrever qualquer código. O inventário de todo comentário que já existe no PR: autor, origem, classe, severidade inferida e se mexe em regra de negócio.
+- `operator-briefing.md` — produzido pelo orquestrador quando `--show-me-comments` roda sob `--auto` ou sem TTY. Markdown só do harness com os comentários que já existem no PR; nunca postado.
 - `response-summary.md` — produzido pelo Author. Contém ação por achado (`FIXED`, `REFUTED`, `DEFERRED`, `ANSWERED`), status de conflito, atribuição de CI por check, SHA dos commits e resultado da verificação. Esses arquivos são estado de máquina e nunca vão para o PR, por isso mantêm o vocabulário em caixa alta que os comentários abandonaram.
 
 O orquestrador faz parsing do front-matter e decide a próxima fase. Cada passo é **inspecionável, repetível e resumível.**
@@ -305,7 +340,12 @@ Modelo de ameaças completo e canal de reporte: veja [SECURITY.md](./SECURITY.md
 [3/6] Author iter 1   → 2 corrigidos, 1 adiado, 1 respondido, respostas postadas, push abc1234
 [3/6] PR visual section replaced
 [3/6] Author iter 1   → conflito em pricing.ts resolvido (merge da base, groom-me confirmou) def5678
+[3/6] conflict: resolved
+[3/6] CI: not-run
 [2/6] Reviewer iter 2 → APPROVED
+[3/6] Author iter 2   → 12 comentários triados (0 acionáveis, 3 ruído, 9 já tratados)
+[3/6] conflict: none
+[3/6] CI: green
 [5/6] CI: aguardando… 2/4 pendentes
 [5/6] CI: unit falhou → atribuído a este PR → assert flaky corrigido, push 9ab0cd1
 [5/6] CI: e2e falhou → atribuído à main (falha em 77f2a1c também) → perguntou, comentário postado
@@ -313,7 +353,7 @@ Modelo de ameaças completo e canal de reporte: veja [SECURITY.md](./SECURITY.md
 [6/6] Merge (squash) → main @ ef01234
 ```
 
-A linha `[mode]` reflete as flags que você passou — `Só PR (sem flags)`, `--merge`, `--review`, `--resolve` ou `--auto`. Os estágios que não rodam no seu modo simplesmente não aparecem.
+A linha `[mode]` reflete as flags que você passou — `Só PR (sem flags)`, `--merge`, `--review`, `--resolve`, `--show-me-comments`, `--unslop` ou `--auto`. Os estágios que não rodam no seu modo simplesmente não aparecem — exceto as linhas `conflict:` e `CI:`, que nunca faltam quando `--resolve` rodou.
 
 ## Contribuindo
 
