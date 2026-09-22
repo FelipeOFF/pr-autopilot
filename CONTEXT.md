@@ -67,6 +67,13 @@ markdown diff). Never HTML. Not the PR visual section. One view per
 comment.
 _Avoid_: PR visual, PR visual section, local HTML, PR description
 
+**`--jev`**:
+Opt-in flag. Before a Reviewer finding is posted, and before the Author
+applies a reply, Specgate must return `verified`. Anything else, including
+MCP down, stays in review. `--auto` does not turn it on. Jev does not
+authorize merge. A business-rule change still goes through `groom-me`.
+_Avoid_: implied by --auto, merge permission, invented verdict
+
 **Unslop pass**:
 The second pass on posted prose, after humanizer. Opt-in `--unslop`.
 `--auto` does not turn it on. Combined with `--review` / `--resolve` it
