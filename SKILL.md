@@ -1,7 +1,7 @@
 ---
 name: pr-autopilot
-description: Orchestrates the full lifecycle of a Pull Request — creation, two-track multi-agent code review (deep maintainability audit for code judo + test-value assessment when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"), or to cascade work items into PRs against the trunk ("cascade these tickets", "/pr-autopilot --cascade"). Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
-argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--show-me-comments] [--unslop] [--cascade] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
+description: Orchestrates the full lifecycle of a Pull Request — creation, two-track multi-agent code review (deep maintainability audit for code judo + test-value assessment when tests are present), triage of every comment already on the PR (human and bot), automated fixes with inline replies, merge-conflict resolution, CI failure attribution and repair, and auto-merge. Use when the user wants to ship a branch end-to-end with minimal supervision, or to work through the feedback and red CI a PR already has (e.g. "open PR and merge", "/pr-autopilot", "ship this branch", "resolve the PR comments", "fix the failing CI on my PR", "review and merge my branch"), or to cascade work items into PRs against the trunk ("cascade these tickets", "/pr-autopilot --cascade"). With `--jev`, Specgate verifies a finding before it is posted and a reply before it is applied; `--auto` does not turn that on. Supports GitHub (gh) and GitLab (glab). Coordinates Reviewer and Author subagents via the Task tool.
+argument-hint: "[--auto] [--review] [--resolve] [--merge] [--show-me] [--show-me-comments] [--unslop] [--cascade] [--jev] [--draft] [--max-iterations <N>] [--merge-strategy squash|merge|rebase] [--base <branch>] [--platform github|gitlab] [--ci-timeout <sec>] [--ci-poll-interval <sec>] [--title <text>] [--body <text>]"
 ---
 
 # pr-autopilot
@@ -309,7 +309,7 @@ on at once with `--auto`.
 | **PR + review** | `--review` | Phase 1 → Phase 2 (Reviewer posts inline comments) → STOP. |
 | **Resolve what's already there** | `--resolve` | Phase 1 → **Phase 3** (`Trigger=pr-feedback`): the Author triages every comment already on the PR — human or bot — resolves conflicts and fixes CI → Phase 5 → STOP before merge. **No new AI review is posted.** |
 | **Review + resolve** | `--review --resolve` | Phase 1 → Phase 2 → Phase 3 (always, even on APPROVED) → loop → STOP before merge. Add `--merge` to merge on green CI. |
-| **Auto (full hands-off)** | `--auto` | Everything on: review + resolve + wait ALL CI + merge, no prompts. Resolves merge conflicts and fixes failing CI along the way. Halts or escalates only on a guardrail it must not cross. Does **not** turn on `--cascade`. |
+| **Auto (full hands-off)** | `--auto` | Everything on: review + resolve + wait ALL CI + merge, no prompts. Resolves merge conflicts and fixes failing CI along the way. Halts or escalates only on a guardrail it must not cross. Does **not** turn on `--cascade` or `--jev`. |
 | **Cascade** | `--cascade` | `plan` then `advance` (§12). IDs → graph (forest, host base = parent head or trunk). An open work-item PR is reused (restacked if the base is wrong). A failed ship stops the forest. No IDs and current PR base ≠ trunk → existing-chain (path to this PR). `--cascade` does not turn `--merge` on. With `--merge` or `--auto`, `land` merges bottom-up (root into the trunk first). `--auto` does not turn this on. A phrase like "cascade these tickets" does. |
 
 Rules that tie the flags together:
@@ -319,7 +319,7 @@ Rules that tie the flags together:
 - `--review --resolve` (and `--auto`) reviews first, then the Author resolves that review *plus* everything else already on the PR — and still runs when the Reviewer approved.
 - `--merge` is what enables the merge. Without it (and without `--auto`), the pipeline always stops before merging, no matter how green CI is.
 - `--auto` is shorthand for `--review --resolve --merge` plus a "never prompt for confirmation" semantic **and** the aggressive-resolution behavior: in `--auto` (and any `--resolve`) run, the Author resolves merge conflicts and fixes failing CI, not just review comments.
-- `--auto` does **not** turn on `--show-me`, `--unslop`, `--show-me-comments`, or `--cascade`.
+- `--auto` does **not** turn on `--show-me`, `--unslop`, `--show-me-comments`, `--cascade`, or `--jev`.
   The PR visual section, comment views, and the operator briefing are separate
   opt-ins. `--show-me` without `--review` still only means the PR visual
   section (existing behavior), not a new review — unless `--resolve` is also
@@ -329,7 +329,7 @@ Rules that tie the flags together:
   `--cascade` graph, brief that PR's comments and continue to the next
   work item — do not abort the forest. A phrase like "cascade these
   tickets" (or equivalent) sets `--cascade`. cascade-flow `--full` does not.
-- `--cascade` does **not** turn on `--merge`. Flags already on this run (`--review`, `--show-me`, `--show-me-comments`, `--unslop`, `--draft`, `--resolve`, `--merge`, `--auto`) compose onto each shipped PR (graph) or the current PR only (existing-chain). Merge is the exception: with `--merge` or `--auto`, `land` walks the path bottom-up — graph: root into the trunk before the child; existing-chain: ancestors plus current, not siblings. `--draft` still forbids merge. A standing human `CHANGES_REQUESTED` still blocks merge of that PR.
+- `--cascade` does **not** turn on `--merge`. Flags already on this run (`--review`, `--show-me`, `--show-me-comments`, `--unslop`, `--jev`, `--draft`, `--resolve`, `--merge`, `--auto`) compose onto each shipped PR (graph) or the current PR only (existing-chain). Merge is the exception: with `--merge` or `--auto`, `land` walks the path bottom-up — graph: root into the trunk before the child; existing-chain: ancestors plus current, not siblings. `--draft` still forbids merge. A standing human `CHANGES_REQUESTED` still blocks merge of that PR.
 - Under `--cascade`, `--base` is the **trunk** the root PR targets (repo default if omitted). It is not this PR's parent.
 - `--draft` forces no merge even when `--merge`/`--auto` is set.
 - **No prompts means no consent.** Anything that needs the developer's explicit yes — a business-rule change (`groom-me`), or a comment claiming CI is red for reasons outside the PR — is never done silently in `--auto` or in a non-interactive run. It is recorded as `escalated` instead.
@@ -343,7 +343,7 @@ required check green AND the PR is `MERGEABLE`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--auto` | `false` | Full hands-off. Turns on `--review`, `--resolve`, `--merge`, disables prompts, and lets the Author resolve conflicts + fix CI. Does **not** turn on `--show-me` or `--cascade`. |
+| `--auto` | `false` | Full hands-off. Turns on `--review`, `--resolve`, `--merge`, disables prompts, and lets the Author resolve conflicts + fix CI. Does **not** turn on `--show-me`, `--cascade`, or `--jev`. |
 | `--review` | `false` | Run the Reviewer subagent (inline comments). |
 | `--resolve` | `false` | Run the Author subagent — always, even when the Reviewer approved. Triages every comment already on the PR (human and bot), addresses the actionable ones, checks (and resolves) merge conflicts, attributes CI and fixes a failure this PR caused. Does **not** imply `--review`; combine them to also post a fresh review first. |
 | `--merge` | `false` | Enable auto-merge once every required check is green and the PR is `MERGEABLE`. Without it (or `--auto`) the pipeline stops before merge. `--cascade` does not turn this on. |
@@ -360,16 +360,39 @@ required check green AND the PR is `MERGEABLE`.
 | `--show-me-comments` | `false` | Print an operator briefing of comments already on the PR: `path:line` when inline, quoted remark, one comment view. Harness-only markdown. Never posted. Never HTML. Not implied by `--auto`. See §3.7. Composes onto a cascade ship when passed. Without `--resolve`, a single-PR run briefs and STOPs; under `--cascade` graph, brief that PR and continue. |
 | `--unslop` | `false` | After humanizer, run posted prose through `unslop` in the invoker's soul (§0.4). Not implied by `--auto`. |
 | `--cascade` | `false` | Opt-in. `plan` then `advance` (§12). IDs or "these tickets": graph mode, a forest. An open work-item PR is reused (restacked if the base is wrong). A failed ship stops the forest. No IDs and current PR base ≠ trunk: existing-chain, the path from the trunk to this PR; siblings stay off the path. Does not turn `--merge` on. With `--merge` or `--auto`, `land` merges bottom-up. Not implied by `--auto`. A phrase like "cascade these tickets" sets it. |
+| `--jev` | `false` | Opt-in. Before a Reviewer finding is posted, and before the Author applies a reply, ask Specgate (§1.1). Only `verified` is posted or applied. Not implied by `--auto`. Does not authorize merge. |
 
 Boolean flags accept a bare form (`--review`, `--unslop`, `--show-me`,
-`--show-me-comments`, `--cascade`) or an explicit value (`--review=true` /
+`--show-me-comments`, `--cascade`, `--jev`) or an explicit value (`--review=true` /
 `--review=false`, `--unslop=true` / `--unslop=false`, `--show-me-comments=true` /
-`--show-me-comments=false`, `--cascade=true` / `--cascade=false`). The bare form
+`--show-me-comments=false`, `--cascade=true` / `--cascade=false`, `--jev=true` /
+`--jev=false`). The bare form
 means `true`. An explicit `--review=false` is only useful to cancel a flag that
 `--auto` would otherwise turn on (e.g. `--auto --merge=false` → do everything but
-stop before merge). `--unslop=false`, `--show-me-comments=false`, and
-`--cascade=false` are the same parse; `--auto` does not turn those on, so the
+stop before merge). `--unslop=false`, `--show-me-comments=false`,
+`--cascade=false`, and `--jev=false` are the same parse; `--auto` does not turn those on, so the
 explicit false is rarely needed. `--cascade=false` cancels a cascade phrase.
+
+### 1.1 Jev gate (`--jev`)
+
+`--jev` defaults to false. `--auto` does not turn it on. Bare `--jev` means
+true; `--jev=false` cancels it.
+
+When it is on, run this before the host POST of a Reviewer finding (§4.6
+step 8) and before the Author applies a reply (§5.2):
+
+1. Call Specgate `jev_verify` on the finding. Claim id `{pr}:finding-{n}`.
+   Evidence is the diff hunk and the comment it answers. For the Author's
+   choice of fix, call `jev_decide` on that choice. Do not send secrets or
+   transcripts.
+2. Only `verified` may be posted or applied.
+3. Any other result — `auto_advance` false, mock, uncalibrated,
+   contradicted, unsupported, an error, or MCP down — stays in review. Record
+   it in `.pr-autopilot/<PR>/jev.md`. Do not invent a verdict. Do not post
+   it. Do not apply it.
+4. Jev does not authorize merge. Merge still requires `--merge` or `--auto`.
+5. A business-rule change still goes through `groom-me` before this gate.
+   Jev does not replace that confirmation.
 
 ### Invocation flow (decision tree)
 
@@ -1504,7 +1527,10 @@ After both tracks complete (or after the code track alone when no tests are in t
    - `--show-me` on and `show-me` missing → already alerted in §3.4 / §4.3;
      post prose + marker, no HTML, no invented view
    - Marker is the last line in every case
-8. **Post the consolidated review** to GitHub/GitLab using those posted bodies:
+8. **Post the consolidated review** to GitHub/GitLab using those posted bodies.
+   When `--jev` is on, run §1.1 first. A finding that is not `verified` stays
+   in `review-report.md` and `.pr-autopilot/<PR>/jev.md` and is left out of
+   the host POST:
    - GitHub: one `gh api -X POST repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews` with all `comments[]` from both tracks, `event=REQUEST_CHANGES` if any BLOCKER, else `COMMENT`
    - GitLab: one `glab api POST` per finding (GitLab doesn't batch them)
 9. **Record `comment_id` and `url`** for each posted finding back into `review-report.md` (the Author needs them in Phase 3).
@@ -1742,7 +1768,9 @@ finding in `review-report.md` when `Trigger=review`.
 | `QUESTION` | Answer it. No commit needed. | `action=answered` |
 
 A finding marked `business_rule: yes` goes through `groom-me` (§5.5) **before** any
-code is written for it.
+code is written for it. When `--jev` is on, run §1.1 after that confirmation
+and before applying the reply. `jev_decide` covers the Author's choice of
+fix. Anything other than `verified` stays in review: no code, no reply.
 
 Every code change written here goes through `ponytail` first (§0.2): reuse what the
 repo already has, smallest diff that fixes the root cause, no refactor larger than

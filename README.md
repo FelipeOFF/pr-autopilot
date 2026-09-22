@@ -54,6 +54,7 @@ Stages ②–⑥ are opt-in. With no flags the run ends after ①.
 - **Multi-agent review loop** with structured findings: `BLOCKER`, `SUGGESTION`, `NITPICK`, `APPROVED`.
 - **Writes like a person, codes like a lazy senior** — every word posted to the PR goes through [`humanizer`](https://github.com/FelipeOFF/skills/tree/main/skills/humanizer) and every line of code through [`ponytail`](https://github.com/FelipeOFF/skills/tree/main/skills/ponytail). No `✅ FIXED` stamps, no `[BLOCKER]` brackets, no emoji openers: comments read like a teammate wrote them, and the machine state rides in an invisible HTML marker. Both skills are also restated inside the skill, so a bare harness without them behaves the same.
 - **`--unslop` second prose pass** — opt-in. After humanizer, posted natural-language (generated title and body, Reviewer findings, Author replies, a posted CI triage comment) goes through [`unslop`](https://github.com/cursor/plugins/tree/main/pstack/skills/unslop) in the invoker's voice: the GitHub or GitLab account of this run, sampled from comments that account already left on this repo. No sample → first person, no voice file. `--auto` does not turn this on. If the skill is missing, the run alerts with `npx skills add https://github.com/cursor/plugins --skill=unslop` and continues humanizer-only — it never fakes the pass.
+- **`--jev` Specgate gate** — opt-in. Before a Reviewer finding is posted, and before the Author applies a reply, Specgate must return `verified`. Anything else stays in review, including MCP down. `--auto` does not turn this on. Jev does not merge. A business-rule change still goes through `groom-me`.
 - **Reviews for over-engineering, not just bugs** — the Reviewer carries the ponytail lens: an abstraction with one caller, a dependency added for three lines, a helper reimplemented when the repo already has one. "Delete this" is a valid finding.
 - **Author with veto power** — the Author can refute a wrong BLOCKER with evidence instead of blindly applying it.
 - **Reads every comment on the PR, not just its own** — with `--resolve`, the Author pulls inline comments, top-level comments and review verdicts from humans *and* bots (Copilot, CodeRabbit, Sonar), classifies each one (critique / question / noise / already handled), infers a severity, and replies inline to each in plain language. Its own past replies are read as state, so it never loops answering itself.
@@ -137,7 +138,7 @@ cp SKILL.md .claude/skills/pr-autopilot/
 ```
 
 When you start typing `/pr-autopilot` in Claude Code, the available flags
-(`--auto`, `--review`, `--resolve`, `--merge`, `--show-me`, `--show-me-comments`, `--unslop`, `--cascade`, `--draft`, …) appear inline
+(`--auto`, `--review`, `--resolve`, `--merge`, `--show-me`, `--show-me-comments`, `--unslop`, `--cascade`, `--jev`, `--draft`, …) appear inline
 thanks to the `argument-hint` declared in the skill's front-matter — same
 pattern GSD uses. `--auto` does not imply `--cascade`.
 
@@ -171,7 +172,7 @@ Everything is opt-in — compose the flags you want (each defaults to `false`):
 | **PR + review** | `/pr-autopilot --review` | Creates PR, posts **inline** review comments, stops |
 | **Resolve what's already there** | `/pr-autopilot --resolve` | Skips the AI review. The Author triages every comment already on the PR — human and bot — fixes what's actionable, resolves conflicts, fixes CI, stops before merge |
 | **Review + resolve** | `/pr-autopilot --review --resolve` | Creates PR, posts an inline review, then the Author **always** runs — even if that review is APPROVED — on that review *plus* everything else on the PR, loops, stops before merge (add `--merge` to merge) |
-| **Auto (full hands-off)** | `/pr-autopilot --auto` | Everything on, never prompts. Resolves conflicts and fixes CI. Waits for **all** CI checks. Merges only when everything is green. Halts or escalates on any guardrail. Does **not** turn on `--cascade`. |
+| **Auto (full hands-off)** | `/pr-autopilot --auto` | Everything on, never prompts. Resolves conflicts and fixes CI. Waits for **all** CI checks. Merges only when everything is green. Halts or escalates on any guardrail. Does **not** turn on `--cascade` or `--jev`. |
 | **Cascade** | `/pr-autopilot --cascade` | IDs → a forest of work items. Reuse an open work-item PR; halt the forest on failure. No IDs and current PR base ≠ trunk → existing-chain (path to this PR; siblings stay). Independent items are roots against the trunk. A blocked child stacks on the parent head. Current feature branch is not the parent. Does not turn `--merge` on. With `--merge` / `--auto`, lands bottom-up (root into the trunk first). `--auto` does not turn this on. |
 
 Notes:
@@ -179,7 +180,7 @@ Notes:
 - `--resolve` is independent of `--review`. Alone, it works the feedback the PR already has without adding a review of its own — that's the mode for a PR a human already reviewed. Combined with `--review`, the Author still runs after an APPROVED verdict (inventory, conflict check, CI attribution). A quiet pass still prints `conflict: none` and `CI: green`.
 - `--merge` is what enables the merge; without it (or `--auto`) the run always stops before merging.
 - `--auto` is shorthand for `--review --resolve --merge` plus "never ask me anything" — but it never relaxes a guardrail: failing tests, a business-rule conflict, an open BLOCKER, or a red check all halt or escalate.
-- `--auto` does **not** turn on `--show-me`, `--unslop`, `--show-me-comments`, or `--cascade`. Those stay opt-in. A phrase like "cascade these tickets" turns `--cascade` on; `--auto` does not.
+- `--auto` does **not** turn on `--show-me`, `--unslop`, `--show-me-comments`, `--cascade`, or `--jev`. Those stay opt-in. A phrase like "cascade these tickets" turns `--cascade` on; `--auto` does not.
 - No prompts means no consent. Anything needing your explicit yes — a business-rule change, or a comment claiming CI is red for reasons outside your PR — is recorded as escalated in `--auto`, never done silently.
 
 ## Usage
@@ -250,6 +251,10 @@ From any branch with commits to ship:
 # Full hands-off plus unslop on every posted prose surface auto already writes
 /pr-autopilot --auto --unslop
 
+# Ask Specgate before posting a finding or applying a reply
+# (--auto does not imply this)
+/pr-autopilot --review --jev
+
 # Forest of work items against the trunk. Source from this repo or IDs.
 # No IDs and current PR stacked: existing-chain (path to this PR).
 # (--auto does not imply this)
@@ -283,7 +288,7 @@ Every boolean flag defaults to `false` — pass it (bare, or `=true`) to turn th
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--auto` | `false` | Full hands-off: turns on `--review`, `--resolve`, `--merge`, never prompts, resolves conflicts + fixes CI. Does **not** turn on `--show-me` or `--cascade`. |
+| `--auto` | `false` | Full hands-off: turns on `--review`, `--resolve`, `--merge`, never prompts, resolves conflicts + fixes CI. Does **not** turn on `--show-me`, `--cascade`, or `--jev`. |
 | `--review` | `false` | Run the Reviewer subagent (inline comments) |
 | `--resolve` | `false` | Run the Author subagent — always, even when the Reviewer approved. Triages every comment already on the PR (human and bot), fixes what's actionable, resolves conflicts, fixes CI. Does **not** imply `--review`. |
 | `--merge` | `false` | Enable auto-merge on green CI + `MERGEABLE`. Without it the run stops before merge. `--cascade` does not turn this on. |
@@ -295,6 +300,7 @@ Every boolean flag defaults to `false` — pass it (bare, or `=true`) to turn th
 | `--show-me-comments` | `false` | Print an operator briefing of comments already on the PR (quoted remark + one comment view; `path:line` when inline). Not posted. Not implied by `--auto`. |
 | `--unslop` | `false` | After humanizer, run posted prose through unslop in the invoker's voice. Not implied by `--auto`. |
 | `--cascade` | `false` | Opt-in. IDs or "these tickets": a forest. Reuses an open work-item PR (restacks if the base is wrong). A failed ship stops the forest. No IDs and current PR base ≠ trunk: existing-chain, the path from the trunk to this PR; siblings stay off the path. Independent items are roots against the trunk. A blocked child stacks on the parent PR head. Does not turn `--merge` on. With `--merge` or `--auto`, lands bottom-up. Not implied by `--auto`. A phrase like "cascade these tickets" sets it. |
+| `--jev` | `false` | Opt-in. Specgate must return `verified` before a finding is posted or a reply is applied. Anything else stays in review. Not implied by `--auto`. Does not authorize merge. |
 | `--ci-timeout` | `1800` | Seconds before bailing on CI |
 | `--ci-poll-interval` | `30` | Seconds between polls |
 
